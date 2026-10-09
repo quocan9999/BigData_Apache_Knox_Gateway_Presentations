@@ -88,10 +88,21 @@ function Invoke-KnoxRequest {
 }
 
 function Invoke-ValidRequest {
-  param([string]$Label)
-  $response = Invoke-KnoxRequest -Username 'admin' -Password 'admin-password'
-  if ($response.ExitCode -ne 0 -or $response.StatusCode -ne '200') {
-    throw "$Label failed (curl exit $($response.ExitCode), HTTP '$($response.StatusCode)'): $($response.Body)"
+  param(
+    [Parameter(Mandatory)][string]$Label,
+    [ValidateRange(0, 120)][int]$RetryTimeoutSeconds = 0
+  )
+  $deadline = [DateTime]::UtcNow.AddSeconds($RetryTimeoutSeconds)
+  $attempt = 0
+  while ($true) {
+    $attempt++
+    $response = Invoke-KnoxRequest -Username 'admin' -Password 'admin-password'
+    if ($response.ExitCode -eq 0 -and $response.StatusCode -eq '200') { break }
+    if ($RetryTimeoutSeconds -eq 0 -or [DateTime]::UtcNow -ge $deadline) {
+      throw "$Label failed after $attempt attempt(s) (curl exit $($response.ExitCode), HTTP '$($response.StatusCode)'): $($response.Body)"
+    }
+    Write-Output "$Label is not ready yet (attempt $attempt, curl exit $($response.ExitCode), HTTP '$($response.StatusCode)'); retrying for up to $RetryTimeoutSeconds seconds."
+    Start-Sleep -Seconds 2
   }
   try {
     $json = $response.Body | ConvertFrom-Json
@@ -104,7 +115,8 @@ function Invoke-ValidRequest {
   if (($names -join '|') -ne ($expected -join '|')) {
     throw "$Label returned unexpected WebHDFS paths: $($names -join ', ')"
   }
-  Write-Output "$Label PASS: HTTP 200 and real WebHDFS JSON contains $($names -join ', ')."
+  $attemptSummary = if ($attempt -gt 1) { " after $attempt attempts" } else { '' }
+  Write-Output "$Label PASS${attemptSummary}: HTTP 200 and real WebHDFS JSON contains $($names -join ', ')."
 }
 
 New-Item -ItemType Directory -Path $testDirectory -Force | Out-Null
@@ -185,7 +197,7 @@ try {
   $ldapStopped = $false
 
   & $readyScript -ProjectName $ProjectName -TimeoutSeconds $TimeoutSeconds
-  Invoke-ValidRequest -Label 'LDAP recovery'
+  Invoke-ValidRequest -Label 'LDAP recovery' -RetryTimeoutSeconds 45
   Write-Output 'REGRESSION LDAP_OUTAGE PASS: valid credentials failed while LDAP was stopped, then authenticated successfully after LDAP recovery.'
 }
 finally {

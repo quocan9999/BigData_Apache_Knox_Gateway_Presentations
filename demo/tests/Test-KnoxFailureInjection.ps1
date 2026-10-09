@@ -166,7 +166,7 @@ try {
   $backendDispatchPattern = '\|WEBHDFS\|admin\|\|\|dispatch\|uri\|http://namenode:9870/webhdfs/v1/demo\?op=LISTSTATUS&user\.name=admin\|unavailable\|Request method: GET'
   Assert-FreshAudit -StartLine $backendAuditStart -Pattern $backendDispatchPattern -Label 'Backend-down dispatch failure'
   $backendLogs = Get-GatewayLogSince -StartLine $gatewayLogStart -Path $gatewayLogPath
-  $connectivityPattern = 'ConnectException|Connection refused|NoRouteToHostException|SocketTimeoutException|UnknownHostException'
+  $connectivityPattern = 'ConnectException|Connection refused|NoRouteToHostException|NoHttpResponseException|SocketTimeoutException|UnknownHostException'
   $connectivityMatches = @($backendLogs.Output -split '\r?\n' | Where-Object { $_ -match $connectivityPattern })
   if ($backendLogs.ExitCode -ne 0 -or $connectivityMatches.Count -eq 0) {
     throw "NameNode was stopped and Knox returned HTTP '$($backendDown.StatusCode)', but fresh Knox connectivity evidence was missing: $($backendLogs.Output | Select-Object -Last 20 | Out-String)"

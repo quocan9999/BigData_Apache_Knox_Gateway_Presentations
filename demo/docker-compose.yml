@@ -35,6 +35,7 @@ services:
         condition: service_completed_successfully
     environment:
       ENSURE_NAMENODE_DIR: /data/name/current
+      HDFS_AUDIT_LOGGER: INFO,stdout
     volumes:
       - ./hadoop/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
       - ./hadoop/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro

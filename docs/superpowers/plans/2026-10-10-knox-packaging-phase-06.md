@@ -106,8 +106,9 @@ if ($missing) { $missing; exit 1 }
 - [x] Dùng project name duy nhất `apache-knox-p06-freshcheck-20261010`; inspect volume names trước khi start và xác nhận hai volume có prefix dự án mới.
 - [x] Chạy `up --wait`, seed hai lần, full A–E/failure suite và stop/restart chỉ trên project mới.
 - [x] Trên stack mới đã stop, mô phỏng owner `0:0` chỉ cho hai volume mới bằng `docker compose @freshCompose run --rm --no-deps --entrypoint /usr/bin/chown hdfs-volume-init -R 0:0 /data/name /data/data`; xác nhận owner sai, chạy lại `hdfs-volume-init` one-off, xác nhận owner `hadoop`, rồi `up --wait`, seed và full suite để chứng minh phục hồi.
-- [x] Stop project fresh bằng `down` không có `-v`; xác nhận volumes mới còn nguyên. Khi thử bật lại project gốc, Compose timeout; probe chỉ đọc trong network namespace vẫn xác nhận NameNode `/dfshealth.html`, JMX `NumLiveDataNodes=1`, LDAP TCP listener và WebHDFS JSON hai file.
-- [ ] Chạy `docker compose up --wait` thành công và full A–E regression cuối trên project gốc sau fresh-project lifecycle; yêu cầu Docker API/readiness hồi phục trước khi đóng gate.
+- [x] Stop project fresh bằng `down` không có `-v`; xác nhận volumes mới còn nguyên. Lần khởi động project gốc ban đầu timeout; sau khi Docker API hồi phục, `up --wait` và readiness đạt.
+- [x] Chạy full A–E regression trên project gốc sau fresh-project lifecycle; runner exit 0, bốn suite và sáu nhóm regression PASS.
+- [x] Chạy thêm full A–E regression trên project `apache-knox-p06-final-20261010` với volumes chưa tồn tại; runner exit 0, hai HDFS files được seed thật, volume mới còn nguyên sau `stop`.
 
 ### Task 4: Static checks và tổng kiểm thử regression
 
@@ -120,8 +121,8 @@ if ($missing) { $missing; exit 1 }
 
 - [x] Parse các Compose file/config, XML và tất cả PowerShell scripts; rà file rác, secrets và `git diff --check`.
 - [x] Chạy full A–E runner cùng stop/restart, seed/reseed, permission recovery và outage/restore trên volumes mới.
-- [ ] Re-run full A–E trên project hiện tại sau khi đưa project mới xuống; xác minh Compose healthy và data nguyên vẹn.
-- [x] Evidence thiếu của project gốc và UI capture được ghi NOT RUN/CHƯA KIỂM CHỨNG; không đánh dấu Phase 06 DONE.
+- [x] Re-run full A–E trên project gốc sau khi đưa project mới xuống; xác minh Compose healthy và hai file HDFS nguyên vẹn.
+- [x] UI capture và kiểm thử trên máy thứ hai vẫn CHƯA KIỂM CHỨNG, được ghi rõ trong handoff; không tuyên bố đã thực hiện.
 
 ### Task 5: Commit và bàn giao Phase 06
 
@@ -134,4 +135,4 @@ if ($missing) { $missing; exit 1 }
 
 - [x] Commit implementation/docs với Conventional Commit tiếng Việt và body bullet liền nhau.
 - [x] Điền handoff với commands, output, versions, timestamp/timezone, limitations và SHA implementation.
-- [x] Tạo handoff commit riêng, push implementation và handoff, verify remote tip `852e30e523759b523f72f19eeb7fb316d717313c` và clean worktree; dừng, không tạo PR.
+- [x] Tạo handoff commit riêng, push implementation và handoff lên feature branch, verify remote tip và clean worktree; dừng, không tạo PR.

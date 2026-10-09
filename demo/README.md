@@ -71,6 +71,14 @@ Audit có thể xem trực tiếp trong container đang chạy:
 docker compose @compose exec -T knox-gateway bash -lc 'tail -n 100 /home/knox/knox/logs/gateway-audit.log'
 ```
 
+Để đối chiếu request thật đã tới HDFS, Compose bật NameNode audit ra stdout bằng `HDFS_AUDIT_LOGGER=INFO,stdout`:
+
+```powershell
+docker compose @compose logs --no-color --since=10m namenode | Select-String 'cmd=listStatus\s+src=/demo'
+```
+
+NameNode audit là bằng chứng backend xử lý `listStatus`; quyết định authentication/authorization và dispatch vẫn được đối chiếu với Knox audit.
+
 Khi trình bày nguồn lỗi, đối chiếu event mới sinh với `principal`, `action`, URI, `outcome`, HTTP status và request ID nếu field hiện diện. HTTP status đứng riêng không đủ chứng minh thành phần từ chối.
 
 ## Chạy test A–E và các ca lỗi
