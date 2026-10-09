@@ -134,4 +134,4 @@ if ($missing) { $missing; exit 1 }
 
 - [x] Commit implementation/docs với Conventional Commit tiếng Việt và body bullet liền nhau.
 - [x] Điền handoff với commands, output, versions, timestamp/timezone, limitations và SHA implementation.
-- [ ] Tạo handoff commit riêng, push cả hai commit, verify remote tip và clean worktree; dừng, không tạo PR.
+- [x] Tạo handoff commit riêng, push implementation và handoff, verify remote tip `852e30e523759b523f72f19eeb7fb316d717313c` và clean worktree; dừng, không tạo PR.
