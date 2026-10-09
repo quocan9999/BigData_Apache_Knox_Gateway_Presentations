@@ -1,86 +1,168 @@
-# Apache Knox local demo
+# Runbook demo Apache Knox
 
-This demo runs HDFS, the Apache Knox Gateway, and the Knox demo LDAP server with Docker Compose. Knox listens on HTTPS at `https://127.0.0.1:8443`; the TLS certificate is self-signed for this local lab.
+Demo dùng HDFS/WebHDFS thật, Apache Knox Gateway và Knox demo LDAP trong Docker Compose. Client Windows chỉ truy cập Gateway tại `https://127.0.0.1:8443`; NameNode WebHDFS `:9870` và LDAP không publish ra host.
 
-The bundled demo LDAP fixture includes `guest` / `guest-password` and `admin` / `admin-password`. These credentials are for this demo only and must not be used for production systems.
+## Điều kiện tiên quyết
 
-## Start and wait for readiness
+- Windows với Windows PowerShell 5.1 trở lên; chạy lệnh bằng `curl.exe` (tránh alias `curl` của PowerShell).
+- Docker Desktop đang chạy **Linux containers**. Xác nhận bằng `docker info --format '{{.OSType}}'`; kết quả cần là `linux`.
+- Docker Compose hỗ trợ `up --wait`; phiên bản được kiểm thử trong repo là 5.3.1. `up --wait` chờ service healthy hoặc running theo healthcheck/dependency.
+- Hãy cấp Docker Desktop đủ RAM để giữ Hadoop, LDAP và Knox chạy đồng thời. Môi trường đã kiểm thử có 8,128,749,568 bytes (~7.57 GiB) khả dụng cho Linux containers; đây là cấu hình quan sát, không phải minimum đã đo.
+- Cần cổng host `127.0.0.1:8443` còn trống. HDFS volumes được tạo tự động bằng Compose; không cần chạy `chown` thủ công.
 
-Run these commands from the `demo` directory in PowerShell:
+Phiên bản quan sát lúc kiểm thử: Windows 11 Home; PowerShell 5.1.26100.9444; Docker Engine Client/Server 29.6.2; Docker Compose 5.3.1; Hadoop `apache/hadoop:3.4.3`; Knox `apache/knox:3.0.0-release` với digest `sha256:058733ba7de9b6f7a37f850a50db343ebb8d0e72bc6bd5ecf668736906f2034c`.
 
-```powershell
-docker compose -p apache-knox-bigdata-demo -f docker-compose.yml -f docker-compose.knox.yml config --quiet
-docker compose -p apache-knox-bigdata-demo -f docker-compose.yml -f docker-compose.knox.yml up -d --wait --wait-timeout 180
-.\scripts\Seed-HdfsDemo.ps1 -TimeoutSeconds 180 -IncludeKnoxOverlay
-.\scripts\Wait-KnoxReady.ps1 -TimeoutSeconds 180
-```
+## Khởi chạy lần đầu
 
-The readiness check waits for the NameNode, LDAP listener, and Knox HTTPS route. Knox's health check requests the demo WebHDFS route without credentials and requires its HTTP 401 Basic challenge.
-
-## Authentication and authorization
-
-Authentication checks whether the LDAP credentials are valid. Authorization then checks whether the authenticated identity may call the `WEBHDFS` service. The default `webhdfs.acl` allows `admin` and denies `guest`; both accounts exist in the demo LDAP fixture.
-
-`curl.exe -k` accepts the demo's self-signed TLS certificate. Use the authorized admin fixture to list the seeded HDFS files through the Gateway:
+Mở PowerShell tại thư mục gốc repository và chuyển vào `demo/`. Các lệnh ở phần còn lại chạy từ thư mục đó:
 
 ```powershell
-curl.exe -k --user 'admin:admin-password' 'https://127.0.0.1:8443/gateway/demo/webhdfs/v1/demo?op=LISTSTATUS'
+Set-Location (Join-Path (git rev-parse --show-toplevel) 'demo')
+$project = 'apache-knox-bigdata-demo'
+$compose = @('-p', $project, '-f', 'docker-compose.yml', '-f', 'docker-compose.knox.yml')
+
+docker compose @compose config --quiet
+docker compose @compose up -d --wait --wait-timeout 180
+.\scripts\Seed-HdfsDemo.ps1 -ProjectName $project -TimeoutSeconds 180 -IncludeKnoxOverlay
+.\scripts\Wait-KnoxReady.ps1 -ProjectName $project -TimeoutSeconds 180
+docker compose @compose ps -a
 ```
 
-The response is WebHDFS JSON and includes `apache-knox.txt` and `bigdata.txt`. A wrong password fails authentication with HTTP 401. A valid guest password passes authentication, then Knox AclsAuthz denies the WebHDFS request with HTTP 403:
+`hdfs-volume-init` ở trạng thái `Exited (0)` là bình thường: đây là one-shot service chuẩn bị quyền trên named volumes trước khi Hadoop khởi động. Readiness yêu cầu NameNode HTTP healthcheck với một live DataNode, LDAP listener và Knox HTTPS route trả Basic challenge HTTP 401 khi chưa gửi thông tin đăng nhập. `Seed-HdfsDemo.ps1` tạo `/demo/apache-knox.txt` và `/demo/bigdata.txt` nếu chưa có; file đã tồn tại được giữ nguyên.
+
+Giữ cùng cửa sổ PowerShell để dùng lại biến `$project` và `$compose` trong các phần bên dưới. Nếu mở cửa sổ mới, chạy lại hai dòng khai báo biến ở trên.
+
+## Kiểm tra truy cập WebHDFS
+
+Fixture LDAP chứa `admin` / `admin-password` và `guest` / `guest-password`. Đây là credentials demo-only, được ghi trong cấu hình mẫu; không dùng ở hệ thống khác.
+
+Admin được phép gọi WebHDFS thật qua Knox. JSON phải có `apache-knox.txt` và `bigdata.txt`:
 
 ```powershell
-curl.exe -k --include --user 'admin:wrong-password' 'https://127.0.0.1:8443/gateway/demo/webhdfs/v1/demo?op=LISTSTATUS'
-curl.exe -k --include --user 'guest:guest-password' 'https://127.0.0.1:8443/gateway/demo/webhdfs/v1/demo?op=LISTSTATUS'
+curl.exe --noproxy '*' --insecure --include --user 'admin:admin-password' 'https://127.0.0.1:8443/gateway/demo/webhdfs/v1/demo?op=LISTSTATUS'
 ```
 
-## Backend network isolation
+Các kết quả đã quan sát và dùng trong năm màn demo:
 
-The Windows host publishes only Knox HTTPS on 127.0.0.1:8443. NameNode WebHDFS (namenode:9870), DataNode, HDFS RPC, and demo LDAP have no host port mappings. Knox reaches WebHDFS over the Compose backend network using the internal service name namenode; other containers attached to that network can also reach the backend, so this is Docker network and port configuration rather than a Knox rule that blocks the NameNode port.
+| Ca | Lệnh/hành vi | Expected và observed | Nguồn kết quả |
+|---|---|---|---|
+| A | Gọi trực tiếp `http://127.0.0.1:9870` từ host | Kết nối thất bại; không có host mapping cho 9870. Lệnh qua Knox vẫn trả JSON HDFS. | Docker port/network mapping; không phải Knox ACL |
+| B | `admin` với mật khẩu sai | HTTP 401; Knox ghi authentication failure cho principal/request. | Knox authentication qua LDAP |
+| C | `guest` với mật khẩu đúng gọi WEBHDFS | HTTP 403; Knox audit ghi authorization failure và NameNode không nhận request listStatus đó. | Knox AclsAuthz |
+| D | `admin` gọi WEBHDFS | HTTP 200; JSON liệt kê hai file HDFS thật. Knox dispatch và NameNode audit xác nhận backend được gọi. | Knox proxy + WebHDFS/HDFS |
+| E | Đọc audit sau B/C/D | Có sự kiện xác thực thất bại, ACL từ chối và dispatch/access thành công. | Log runtime của Knox |
 
-Check the resolved Compose mappings and run the isolation/restart check from PowerShell:
-
-    docker compose -p apache-knox-bigdata-demo -f docker-compose.yml -f docker-compose.knox.yml config --format json
-    & 'tests/Test-KnoxBackendIsolation.ps1' -TimeoutSeconds 180
-
-The test inspects Docker Engine port bindings, confirms Windows has no listener on 9870, expects a direct host curl.exe connection to fail, then confirms the admin route through Knox still returns both HDFS files. It restarts HDFS, LDAP, and Knox services and repeats the checks without deleting the named volumes.
-
-## Run the full five-screen demo
-
-Run the complete real-stack suite from the `demo` directory in PowerShell:
+Lệnh kiểm tra A bằng tay (lỗi kết nối là expected khi stack đã bật):
 
 ```powershell
-.\tests\Test-KnoxDemo.ps1 -TimeoutSeconds 180
+curl.exe --noproxy '*' --include --max-time 5 'http://127.0.0.1:9870/webhdfs/v1/demo?op=LISTSTATUS'
 ```
 
-The runner checks Docker and Compose, waits for HDFS and Knox before each suite, and prints `PASS`, `FAIL`, or `BLOCKED` for screens A–E and each child suite. It also reports LDAP outage/recovery, ACL reversal/restoration, missing-route, backend-down/recovery, readiness-timeout/recovery, and final stack recovery. The command exits zero only when every screen, suite, and regression group passes. Each child suite has a full log under the printed `%TEMP%\knox-demo-v1-*` directory; the logs stay on this machine and the checks do not print passwords.
-
-To run individual suites instead, use these commands:
-
-The authentication test starts or waits for the Compose stack, seeds the expected HDFS files idempotently, verifies the unauthenticated challenge, checks admin and invalid credentials, stops LDAP to verify authentication failure, then restores LDAP and checks recovery:
+Sai mật khẩu và user bị ACL chặn:
 
 ```powershell
-.\tests\Test-KnoxGateway.ps1 -TimeoutSeconds 180
+curl.exe --noproxy '*' --insecure --include --user 'admin:wrong-password' 'https://127.0.0.1:8443/gateway/demo/webhdfs/v1/demo?op=LISTSTATUS'
+curl.exe --noproxy '*' --insecure --include --user 'guest:guest-password' 'https://127.0.0.1:8443/gateway/demo/webhdfs/v1/demo?op=LISTSTATUS'
 ```
 
-The authorization test verifies the real default policy (admin allowed, guest denied), checks Knox audit and NameNode evidence for the denial origin, confirms an invalid password still fails during authentication, reverses the ACL to prove the result changes with policy, then restores the default topology:
+Audit có thể xem trực tiếp trong container đang chạy:
 
 ```powershell
-.\tests\Test-KnoxAuthorization.ps1 -TimeoutSeconds 180
+docker compose @compose exec -T knox-gateway bash -lc 'tail -n 100 /home/knox/knox/logs/gateway-audit.log'
 ```
 
-The failure-injection test checks a missing service route, a stopped NameNode, and a deliberately failing Gateway health check. It restores the normal stack and verifies the admin WebHDFS listing after each injection:
+Khi trình bày nguồn lỗi, đối chiếu event mới sinh với `principal`, `action`, URI, `outcome`, HTTP status và request ID nếu field hiện diện. HTTP status đứng riêng không đủ chứng minh thành phần từ chối.
+
+## Chạy test A–E và các ca lỗi
+
+Runner dùng stack thật; trả exit code khác 0 nếu bất kỳ screen, suite hoặc nhóm regression nào thất bại:
 
 ```powershell
-.\tests\Test-KnoxFailureInjection.ps1 -TimeoutSeconds 180
+.\tests\Test-KnoxDemo.ps1 -ProjectName $project -TimeoutSeconds 180
 ```
 
-## Stop the demo
-
-Run from the `demo` directory:
+Runner xác nhận A–E và các ca LDAP outage/recovery, đảo/khôi phục ACL, missing route, backend down/recovery, readiness timeout/recovery, restart và final stack recovery. Kết quả chi tiết được ghi trong thư mục `%TEMP%\knox-demo-v1-*` do runner in ra. Giữ log ở máy chạy; không commit log, transcript, credentials hoặc volume data. Có thể xem suite riêng bằng:
 
 ```powershell
-docker compose -p apache-knox-bigdata-demo -f docker-compose.yml -f docker-compose.knox.yml down
+.\tests\Test-KnoxBackendIsolation.ps1 -ProjectName $project -TimeoutSeconds 180
+.\tests\Test-KnoxGateway.ps1 -ProjectName $project -TimeoutSeconds 180
+.\tests\Test-KnoxAuthorization.ps1 -ProjectName $project -TimeoutSeconds 180
+.\tests\Test-KnoxFailureInjection.ps1 -ProjectName $project -TimeoutSeconds 180
 ```
 
-This removes the demo containers and network while retaining the named HDFS data volumes. Do not add `-v` when stopping the demo.
+## Khởi tạo project/volumes sạch
+
+Compose project name quyết định prefix cho named volumes. `-p` ghi đè top-level Compose `name`; chọn một tên mới để tạo bộ HDFS volumes độc lập. Không bỏ bước xem volume names trước khi `up`:
+
+```powershell
+$freshProject = "apache-knox-fresh-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+$freshCompose = @('-p', $freshProject, '-f', 'docker-compose.yml', '-f', 'docker-compose.knox.yml')
+$freshConfig = docker compose @freshCompose config --format json | ConvertFrom-Json
+$freshVolumes = @($freshConfig.volumes.hdfs_namenode.name, $freshConfig.volumes.hdfs_datanode.name)
+$freshVolumes
+if ($freshVolumes | Where-Object { $_ -notlike "${freshProject}_*" }) { throw 'Fresh project volume prefix mismatch; stop before starting Compose.' }
+$allVolumeNames = @(docker volume ls --format '{{.Name}}')
+if ($LASTEXITCODE -ne 0) { throw 'Could not inspect Docker volumes; stop before starting Compose.' }
+$existingVolumes = @($freshVolumes | Where-Object { $allVolumeNames -contains $_ })
+if ($existingVolumes.Count -gt 0) { throw "Fresh project volumes already exist: $($existingVolumes -join ', '). Choose a new project name before starting Compose." }
+
+docker compose @freshCompose up -d --wait --wait-timeout 180
+.\scripts\Seed-HdfsDemo.ps1 -ProjectName $freshProject -TimeoutSeconds 180 -IncludeKnoxOverlay
+.\scripts\Seed-HdfsDemo.ps1 -ProjectName $freshProject -TimeoutSeconds 180 -IncludeKnoxOverlay
+.\tests\Test-KnoxDemo.ps1 -ProjectName $freshProject -TimeoutSeconds 180
+```
+
+Chạy seed hai lần để xác nhận lần sau giữ file đã có. Nếu muốn dừng stack kiểm tra sạch, chạy `docker compose @freshCompose down` **không thêm `-v`**. Named volumes của project mới vẫn nằm trên máy và sẽ được dùng lại nếu chạy lại cùng tên; hãy chọn tên project mới cho một lượt thử sạch tiếp theo. Hướng dẫn này xác nhận một bộ volume mới trên máy kiểm thử, không khẳng định đã chạy trên máy tính thứ hai.
+
+## Phục hồi quyền volume
+
+Nếu Hadoop báo không ghi được vào `/data/name` hoặc `/data/data`, dừng stack trước rồi chạy lại one-shot service đã cấu hình trong Compose. Service chạy root, so sánh owner của root volume với UID:GID `hadoop`; khi khác nhau, nó khôi phục owner đệ quy rồi mở quyền đọc/ghi/thực thi cho owner. Service không format volume và không xóa file:
+
+```powershell
+docker compose @compose stop
+docker compose @compose run --rm --no-deps hdfs-volume-init
+docker compose @compose up -d --wait --wait-timeout 180
+.\scripts\Seed-HdfsDemo.ps1 -ProjectName $project -TimeoutSeconds 180 -IncludeKnoxOverlay
+.\scripts\Wait-KnoxReady.ps1 -ProjectName $project -TimeoutSeconds 180
+docker compose @compose exec -T namenode hdfs dfs -ls /demo
+```
+
+Nếu dữ liệu con có owner sai trong khi root volume đã sở hữu bởi user `hadoop`, helper hiện tại không phát hiện riêng từng file. Dừng lại, giữ nguyên volumes và xem log/owner trước khi chọn biện pháp sửa; không dùng lệnh xóa hoặc format HDFS.
+
+## Dừng và khởi động lại
+
+`stop` dừng containers nhưng giữ chúng và volumes; `up` khởi động lại. Có thể seed lại an toàn:
+
+```powershell
+docker compose @compose stop
+docker compose @compose up -d --wait --wait-timeout 180
+.\scripts\Seed-HdfsDemo.ps1 -ProjectName $project -TimeoutSeconds 180 -IncludeKnoxOverlay
+docker compose @compose exec -T namenode hdfs dfs -ls /demo
+```
+
+Nếu muốn bỏ containers/network nhưng giữ HDFS data, chạy `docker compose @compose down`. **Không chạy `docker compose down -v`** vì tùy chọn đó xóa volumes.
+
+## Khắc phục sự cố
+
+| Triệu chứng | Kiểm tra/xử lý |
+|---|---|
+| Docker báo Windows containers hoặc không kết nối daemon | Kiểm tra Docker Desktop đang chạy Linux containers rồi xác nhận `docker info --format '{{.OSType}}'` trả `linux`. |
+| Gateway không bind được cổng | `Get-NetTCPConnection -LocalPort 8443 -State Listen -ErrorAction SilentlyContinue`; xác định ứng dụng đang giữ cổng trước khi đổi cấu hình. |
+| Compose chưa healthy hoặc `up --wait` hết timeout | `docker compose @compose ps -a` và `docker compose @compose logs --tail 100 namenode datanode hdfs-volume-init knox-ldap knox-gateway`; sửa nguyên nhân rồi chạy lại readiness. |
+| `hdfs-volume-init` hiện `Exited (1)` | Đọc log service, xác nhận Docker mount hoạt động, rồi chạy quy trình [Phục hồi quyền volume](#phục-hồi-quyền-volume). `Exited (0)` là thành công bình thường. |
+| Host gọi 9870 thất bại | Đây là expected của screen A. Nếu cổng mở, kiểm tra Compose không có `ports:` trên NameNode; không thêm publish backend để “sửa” Knox. |
+| HTTP 401 | Không gửi credentials, credentials sai, hoặc LDAP outage. Đối chiếu Knox authentication audit; 401 tự nó chưa chỉ ra tình huống nào. |
+| HTTP 403 với `guest` | Expected khi ACL mặc định từ chối WEBHDFS. Dùng audit Knox và test đối chứng để xác nhận nguồn là AclsAuthz. |
+| HTTP 404 | Có thể là route/service không tồn tại; test fixture missing-route chủ động dùng 404. Không diễn giải là ACL denial. |
+| HTTP 500 khi NameNode dừng | Expected trong backend-down test; kiểm tra Knox dispatch/gateway log và khôi phục NameNode. Đây không phải bằng chứng về ACL. |
+| Không thấy hai file | Chạy HDFS readiness, seed idempotent rồi `hdfs dfs -ls /demo`. Không tạo response JSON giả. |
+
+## Giới hạn an toàn và vận hành
+
+- TLS của Knox là self-signed cho localhost; `--insecure`/`-k` chỉ dùng trong lab.
+- Tài khoản LDAP chỉ là fixture demo. Runner không cần ghi credentials vào log.
+- `dfs.permissions.enabled=false`: Knox ACL bảo vệ đường truy cập qua Gateway nhưng không thay thế quyền HDFS. Client khác trên Docker network có thể gọi backend.
+- Cổng host `9870` không publish; Docker network isolation không phải ranh giới bảo mật production.
+- Không commit capture, transcript, runtime log, `.env` cá nhân, volumes hay secrets. Quy tắc lưu evidence thật nằm tại [`demo-backup/README.md`](../demo-backup/README.md).
+
+Tham khảo: [Docker Compose project name](https://docs.docker.com/compose/how-tos/project-name/), [`docker compose up`](https://docs.docker.com/reference/cli/docker/compose/up/) và [`docker compose down`](https://docs.docker.com/reference/cli/docker/compose/down/).
