@@ -1,10 +1,38 @@
 name: apache-knox-bigdata-demo
 
 services:
+  hdfs-volume-init:
+    image: apache/hadoop:3.4.3
+    user: "0:0"
+    entrypoint: ["/usr/bin/bash", "-ec"]
+    command:
+      - |
+        set -eu
+        hadoop_uid="$$(id -u hadoop)"
+        hadoop_gid="$$(id -g hadoop)"
+        prepare_volume() {
+          path="$$1"
+          mkdir -p "$$path"
+          owner="$$(stat -c '%u:%g' "$$path")"
+          if [ "$$owner" != "$${hadoop_uid}:$${hadoop_gid}" ]; then
+            chown -R "$${hadoop_uid}:$${hadoop_gid}" "$$path"
+          fi
+          chmod u+rwx "$$path"
+          printf 'Prepared %s for Hadoop UID:GID %s:%s\n' "$$path" "$$hadoop_uid" "$$hadoop_gid"
+        }
+        prepare_volume /data/name
+        prepare_volume /data/data
+    volumes:
+      - hdfs_namenode:/data/name
+      - hdfs_datanode:/data/data
+
   namenode:
     image: apache/hadoop:3.4.3
     hostname: namenode
     command: ["hdfs", "namenode"]
+    depends_on:
+      hdfs-volume-init:
+        condition: service_completed_successfully
     environment:
       ENSURE_NAMENODE_DIR: /data/name/current
     volumes:
@@ -15,6 +43,14 @@ services:
     # KHI THEM KNOX: XOA muc 'ports' nay de backend khong exposed tren host.
     ports:
       - "127.0.0.1:9870:9870"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl --fail --silent --max-time 3 http://127.0.0.1:9870/ >/dev/null && hdfs dfsadmin -report | grep -Fq 'Live datanodes (1)'
+      interval: 5s
+      timeout: 15s
+      retries: 24
+      start_period: 30s
     networks:
       - backend
 
@@ -23,7 +59,10 @@ services:
     hostname: datanode
     command: ["hdfs", "datanode"]
     depends_on:
-      - namenode
+      hdfs-volume-init:
+        condition: service_completed_successfully
+      namenode:
+        condition: service_started
     volumes:
       - ./hadoop/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
       - ./hadoop/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro
