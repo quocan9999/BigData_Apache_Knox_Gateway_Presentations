@@ -132,6 +132,6 @@ if ($missing) { $missing; exit 1 }
 - Consumes: final test output, current Git state and exact implementation commit SHA.
 - Produces: truthful final handoff and separate commits pushed to the existing feature branch.
 
-- [ ] Commit implementation/docs với Conventional Commit tiếng Việt và body bullet liền nhau.
-- [ ] Điền handoff từ template với commands, output, versions, timestamp/timezone, limitations và SHA implementation.
-- [ ] Commit handoff riêng, push cả hai commit, verify remote tip và clean worktree; dừng, không tạo PR.
+- [x] Commit implementation/docs với Conventional Commit tiếng Việt và body bullet liền nhau.
+- [x] Điền handoff với commands, output, versions, timestamp/timezone, limitations và SHA implementation.
+- [ ] Tạo handoff commit riêng, push cả hai commit, verify remote tip và clean worktree; dừng, không tạo PR.
