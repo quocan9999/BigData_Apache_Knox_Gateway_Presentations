@@ -39,10 +39,6 @@ services:
       - ./hadoop/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
       - ./hadoop/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro
       - hdfs_namenode:/data/name
-    # CHI GIAI DOAN 1: mo port tren localhost de kiem tra WebHDFS.
-    # KHI THEM KNOX: XOA muc 'ports' nay de backend khong exposed tren host.
-    ports:
-      - "127.0.0.1:9870:9870"
     healthcheck:
       test:
         - CMD-SHELL

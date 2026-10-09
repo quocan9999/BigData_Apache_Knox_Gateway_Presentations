@@ -34,6 +34,17 @@ curl.exe -k --include --user 'admin:wrong-password' 'https://127.0.0.1:8443/gate
 curl.exe -k --include --user 'guest:guest-password' 'https://127.0.0.1:8443/gateway/demo/webhdfs/v1/demo?op=LISTSTATUS'
 ```
 
+## Backend network isolation
+
+The Windows host publishes only Knox HTTPS on 127.0.0.1:8443. NameNode WebHDFS (namenode:9870), DataNode, HDFS RPC, and demo LDAP have no host port mappings. Knox reaches WebHDFS over the Compose backend network using the internal service name namenode; other containers attached to that network can also reach the backend, so this is Docker network and port configuration rather than a Knox rule that blocks the NameNode port.
+
+Check the resolved Compose mappings and run the isolation/restart check from PowerShell:
+
+    docker compose -p apache-knox-bigdata-demo -f docker-compose.yml -f docker-compose.knox.yml config --format json
+    & 'tests/Test-KnoxBackendIsolation.ps1' -TimeoutSeconds 180
+
+The test inspects Docker Engine port bindings, confirms Windows has no listener on 9870, expects a direct host curl.exe connection to fail, then confirms the admin route through Knox still returns both HDFS files. It restarts HDFS, LDAP, and Knox services and repeats the checks without deleting the named volumes.
+
 ## Run the end-to-end checks
 
 The authentication test starts or waits for the Compose stack, seeds the expected HDFS files idempotently, verifies the unauthenticated challenge, checks admin and invalid credentials, stops LDAP to verify authentication failure, then restores LDAP and checks recovery:
