@@ -4,7 +4,7 @@
 
 - Phase: 06 — đóng gói demo Apache Knox v1
 - Trạng thái: **BLOCKED — chưa DONE**
-- Thời gian kiểm chứng: 2026-10-10 01:22–01:53, Asia/Ho_Chi_Minh (UTC+07:00)
+- Thời gian kiểm chứng: 2026-10-10 01:22–02:19, Asia/Ho_Chi_Minh (UTC+07:00)
 - Nhánh: `feat/demo-ver-1-knox-gateway`
 - Base SHA: `2bcb31d09080f072e1f6d2b96d0b8c546ec249ea`
 - SHA commit implementation: `7213b36f68c20eca117bb30f633df200f94e87a1`
@@ -17,8 +17,8 @@
 - Xác minh lệnh khởi chạy từ đúng thư mục `demo/`; Compose readiness, seed và Knox readiness thành công trên stack ban đầu trước khi kiểm tra project mới.
 - Dùng project độc lập `apache-knox-p06-freshcheck-20261010`; volumes mới không trùng với project gốc. Seed hai lần, stop/restart, phục hồi owner và hai lượt runner đầy đủ đều giữ hai file HDFS.
 - Không chạy `docker compose down -v`; volumes của project gốc và project kiểm thử không bị xóa.
-- Sau khi dừng project mới, lần khởi động lại project gốc bằng `docker compose up --wait --wait-timeout 180` bị timeout ở dependency NameNode/LDAP. Probe chỉ đọc từ network namespace vẫn đọc được HDFS và kết nối LDAP, nhưng Knox readiness và runner cuối trên project gốc chưa được xác nhận.
-- Vì thiếu lượt regression cuối trên project gốc, Phase 06 chưa đạt Definition of Done. Không kiểm thử trên máy thứ hai; giao diện Snipping Tool/Game Bar cũng chưa được xác minh trên host này.
+- Lần khởi động project gốc sau project mới ban đầu bị timeout; sau đó Docker Engine hồi phục, Compose `up --wait` thành công và các dịch vụ chính báo healthy.
+- Lượt regression cuối trên project gốc đã chạy, nhưng runner trả exit code 1 vì các assertion audit NameNode và khôi phục xác thực LDAP không đạt; xem `P06-ORIGINAL-REGRESSION` bên dưới. Phase 06 vẫn chưa đạt Definition of Done. Không kiểm thử trên máy thứ hai; giao diện Snipping Tool/Game Bar cũng chưa được xác minh trên host này.
 
 ## 3. Files thay đổi
 
@@ -48,11 +48,13 @@ Handoff này được commit riêng sau implementation commit.
 | P06-RESTART | Project mới: `stop`, `up --wait`, reseed, rồi `down` không `-v` | Listing/status hai file không đổi; sau `down`, cả hai named volumes của project mới còn tồn tại | PASS |
 | P06-ORIGINAL | Thử `docker compose up -d --wait --wait-timeout 180` trên project gốc sau khi hạ project mới | Compose timeout: dependency NameNode/LDAP không đạt trạng thái chờ; `dockerDesktopLinuxEngine` named-pipe `/_ping` không phản hồi trong 5 giây và một số Docker CLI query bị treo | BLOCKED |
 | P06-ORIGINAL-READONLY | Probe chỉ đọc qua network namespace của NameNode gốc và kiểm tra LDAP listener | `/dfshealth.html` trả thành công; JMX `NumLiveDataNodes=1`; WebHDFS JSON còn đúng hai file; LDAP TCP 33389 nhận kết nối. Knox readiness và full A–E sau lifecycle chưa xác nhận | PARTIAL |
+| P06-ORIGINAL-REGRESSION | `docker compose -p apache-knox-bigdata-demo -f docker-compose.yml -f docker-compose.knox.yml up -d --wait --wait-timeout 180`; sau đó ` .\tests\Test-KnoxDemo.ps1 -ProjectName apache-knox-bigdata-demo -TimeoutSeconds 180` từ `demo/` | Compose/readiness và seed đạt; HDFS/WebHDFS thật có hai file; host không kết nối được `:9870`, Knox trả HTTP 200 JSON. Runner **exit 1**: Screen A fail vì NameNode `listStatus` audit counter không tăng (0→0); Screen B sai mật khẩu + Knox auth audit đạt nhưng LDAP recovery trả 401 sau khi LDAP/Gateway readiness đã healthy; Screen D admin nhận JSON thật và Knox dispatch/access audit thành công nhưng assertion NameNode audit không đạt. Guest-denial của C chưa được xác nhận trong lượt này; E chưa đạt gate suite. Các suite Isolation, Authentication, Authorization và Failure Injection báo FAIL; `READINESS_TIMEOUT_AND_RECOVERY` BLOCKED; `FINAL_STACK_RECOVERY` PASS. Stack cuối lượt đã healthy. | BLOCKED |
 
 Hai log runner local, không commit:
 
 - `C:\Users\trinh\AppData\Local\Temp\knox-demo-v1-20261010-012227-c39e23f78657423b83c2f28a1d766576` — kết thúc 01:28:48 +07:00.
 - `C:\Users\trinh\AppData\Local\Temp\knox-demo-v1-20261010-013101-6c85a93df93642859195f94f6631fc7a` — kết thúc 01:37:24 +07:00.
+- `C:\Users\trinh\AppData\Local\Temp\knox-demo-v1-20261010-021630-be5a29611cf645ed95edf4364eaf59f7` — lượt regression trên project gốc, runner exit 1; kết thúc 02:19:04 +07:00.
 - Cả hai lượt có marker PASS cho screens A–E, suites và nhóm regression; scan không tìm thấy `admin-password` hoặc `guest-password` trong log.
 
 Volumes dự án gốc được giữ nguyên: `apache-knox-bigdata-demo_hdfs_namenode`, `apache-knox-bigdata-demo_hdfs_datanode`. Hai volume project mới có prefix `apache-knox-p06-freshcheck-20261010_`; tên được kiểm tra trước khi `up` và xác nhận còn tồn tại sau `down` không kèm `-v`.
@@ -68,14 +70,14 @@ Volumes dự án gốc được giữ nguyên: `apache-knox-bigdata-demo_hdfs_na
 
 ## 6. Blocker và bước tiếp theo
 
-Docker Desktop Engine API ngừng phản hồi ổn định sau lifecycle project mới, dù một số tiến trình container và probe nội bộ vẫn phản hồi. Trên máy có những dịch vụ/container khác gồm MySQL và Apache. Restart Docker Desktop có thể ngắt các workload đó, nên chưa tự thực hiện.
+Docker Engine hiện phản hồi và project gốc đã healthy; blocker hiện tại là regression gate, không còn là khả năng khởi động Docker. Bằng chứng lần chạy mới nằm trong log local, không commit:
 
-Sau khi người dùng restart Docker Desktop hoặc xác nhận cho phép restart toàn bộ Docker Desktop:
+- `C:\Users\trinh\AppData\Local\Temp\knox-demo-v1-20261010-021630-be5a29611cf645ed95edf4364eaf59f7\01-screen-a-isolation.log`: isolation và JSON WebHDFS thật đạt, nhưng assertion NameNode `listStatus` audit tăng 0→0 nên suite fail.
+- `C:\Users\trinh\AppData\Local\Temp\knox-demo-v1-20261010-021630-be5a29611cf645ed95edf4364eaf59f7\02-screen-b-authentication.log`: sai mật khẩu bị Knox từ chối và audit auth thất bại hiện hữu; sau phục hồi LDAP, readiness đạt nhưng xác thực admin vẫn HTTP 401.
+- `C:\Users\trinh\AppData\Local\Temp\knox-demo-v1-20261010-021630-be5a29611cf645ed95edf4364eaf59f7\03-screens-cde-authorization.log`: admin nhận HTTP 200 + hai file thật; Knox dispatch/access audit ghi success; assertion NameNode audit làm lượt kiểm thử dừng trước khi chứng minh guest denial.
+- Lệnh tái hiện: từ `demo/`, ` .\tests\Test-KnoxDemo.ps1 -ProjectName apache-knox-bigdata-demo -TimeoutSeconds 180` (exit 1; log folder nêu trên).
 
-1. Xác nhận `docker info --format '{{.OSType}}'` trả `linux` và Compose API hoạt động.
-2. Chạy `docker compose @compose up -d --wait --wait-timeout 180` cho project gốc; xác nhận NameNode, DataNode, LDAP và Gateway readiness.
-3. Seed idempotent, xác nhận listing hai file, rồi chạy `Test-KnoxDemo.ps1 -ProjectName $project -TimeoutSeconds 180` trên project gốc.
-4. Ghi lại kết quả cuối. Chỉ đánh dấu DONE nếu toàn bộ regression cuối đạt và mọi evidence còn thiếu được xử lý.
+Phase 06 giữ trạng thái BLOCKED. Chưa đánh dấu DONE và chưa chuyển sang PR; cần xử lý các gate trên rồi chạy lại regression đầy đủ trước khi hoàn tất.
 
 ## 7. Checklist bàn giao
 
