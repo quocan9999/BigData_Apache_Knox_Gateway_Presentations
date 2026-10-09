@@ -77,7 +77,7 @@ function Invoke-KnoxRequest {
 
 function Invoke-ValidRequest {
   param([string]$Label)
-  $response = Invoke-KnoxRequest -Username 'guest' -Password 'guest-password'
+  $response = Invoke-KnoxRequest -Username 'admin' -Password 'admin-password'
   if ($response.ExitCode -ne 0 -or $response.StatusCode -ne '200') {
     throw "$Label failed (curl exit $($response.ExitCode), HTTP '$($response.StatusCode)'): $($response.Body)"
   }
@@ -127,7 +127,7 @@ try {
   $invalidLogCountResult = Invoke-Compose -Arguments @('exec', '-T', 'knox-gateway', 'wc', '-l', '/home/knox/knox/logs/gateway.log')
   if ($invalidLogCountResult.ExitCode -ne 0) { throw "Could not capture the Gateway log offset: $($invalidLogCountResult.Output)" }
   $invalidLogStart = [int](($invalidLogCountResult.Output -split '\s+')[0])
-  $invalid = Invoke-KnoxRequest -Username 'guest' -Password 'wrong-password'
+  $invalid = Invoke-KnoxRequest -Username 'admin' -Password 'wrong-password'
   if ($invalid.ExitCode -ne 0 -or $invalid.StatusCode -ne '401' -or
       $invalid.Headers -notmatch '(?im)^WWW-Authenticate:\s*Basic') {
     throw "Invalid LDAP password was not rejected with an authentication challenge (curl exit $($invalid.ExitCode), HTTP '$($invalid.StatusCode)')."
@@ -146,7 +146,7 @@ try {
   if ($stop.ExitCode -ne 0) { throw "Could not stop LDAP for the negative test: $($stop.Output)" }
   $ldapStopped = $true
 
-  $unavailable = Invoke-KnoxRequest -Username 'guest' -Password 'guest-password' -TimeoutSeconds 30
+  $unavailable = Invoke-KnoxRequest -Username 'admin' -Password 'admin-password' -TimeoutSeconds 30
   if ($unavailable.ExitCode -eq 0 -and $unavailable.StatusCode -eq '200') {
     throw 'Knox accepted a request while the LDAP service was stopped.'
   }

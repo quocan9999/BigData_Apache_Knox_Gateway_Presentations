@@ -3,7 +3,9 @@ param(
   [string]$ProjectName = 'apache-knox-bigdata-demo',
 
   [ValidateRange(1, 600)]
-  [int]$TimeoutSeconds = 180
+  [int]$TimeoutSeconds = 180,
+
+  [switch]$IncludeGuestAllowedAclOverlay
 )
 
 Set-StrictMode -Version Latest
@@ -14,6 +16,9 @@ $composePrefix = @(
   '-f', 'docker-compose.yml',
   '-f', 'docker-compose.knox.yml'
 )
+if ($IncludeGuestAllowedAclOverlay) {
+  $composePrefix += @('-f', 'docker-compose.knox-acl-test.yml')
+}
 
 function Invoke-Compose {
   param([string[]]$Arguments)

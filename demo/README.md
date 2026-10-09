@@ -17,26 +17,35 @@ docker compose -p apache-knox-bigdata-demo -f docker-compose.yml -f docker-compo
 
 The readiness check waits for the NameNode, LDAP listener, and Knox HTTPS route. Knox's health check requests the demo WebHDFS route without credentials and requires its HTTP 401 Basic challenge.
 
-## Request WebHDFS through Knox
+## Authentication and authorization
 
-`curl.exe -k` accepts the demo's self-signed TLS certificate. Use the guest fixture to list the seeded HDFS files through the Gateway:
+Authentication checks whether the LDAP credentials are valid. Authorization then checks whether the authenticated identity may call the `WEBHDFS` service. The default `webhdfs.acl` allows `admin` and denies `guest`; both accounts exist in the demo LDAP fixture.
 
-```powershell
-curl.exe -k --user 'guest:guest-password' 'https://127.0.0.1:8443/gateway/demo/webhdfs/v1/demo?op=LISTSTATUS'
-```
-
-The response is WebHDFS JSON and includes `apache-knox.txt` and `bigdata.txt`. To check authentication rejection, use a wrong password; Knox responds with HTTP 401:
+`curl.exe -k` accepts the demo's self-signed TLS certificate. Use the authorized admin fixture to list the seeded HDFS files through the Gateway:
 
 ```powershell
-curl.exe -k --include --user 'guest:wrong-password' 'https://127.0.0.1:8443/gateway/demo/webhdfs/v1/demo?op=LISTSTATUS'
+curl.exe -k --user 'admin:admin-password' 'https://127.0.0.1:8443/gateway/demo/webhdfs/v1/demo?op=LISTSTATUS'
 ```
 
-## Run the end-to-end check
+The response is WebHDFS JSON and includes `apache-knox.txt` and `bigdata.txt`. A wrong password fails authentication with HTTP 401. A valid guest password passes authentication, then Knox AclsAuthz denies the WebHDFS request with HTTP 403:
 
-The script starts or waits for the Compose stack, seeds the expected HDFS files idempotently, verifies the unauthenticated challenge, checks valid and invalid LDAP credentials, stops LDAP to verify authentication failure, then restores LDAP and checks recovery:
+```powershell
+curl.exe -k --include --user 'admin:wrong-password' 'https://127.0.0.1:8443/gateway/demo/webhdfs/v1/demo?op=LISTSTATUS'
+curl.exe -k --include --user 'guest:guest-password' 'https://127.0.0.1:8443/gateway/demo/webhdfs/v1/demo?op=LISTSTATUS'
+```
+
+## Run the end-to-end checks
+
+The authentication test starts or waits for the Compose stack, seeds the expected HDFS files idempotently, verifies the unauthenticated challenge, checks admin and invalid credentials, stops LDAP to verify authentication failure, then restores LDAP and checks recovery:
 
 ```powershell
 .\tests\Test-KnoxGateway.ps1 -TimeoutSeconds 180
+```
+
+The authorization test verifies the real default policy (admin allowed, guest denied), checks Knox audit and NameNode evidence for the denial origin, confirms an invalid password still fails during authentication, reverses the ACL to prove the result changes with policy, then restores the default topology:
+
+```powershell
+.\tests\Test-KnoxAuthorization.ps1 -TimeoutSeconds 180
 ```
 
 ## Stop the demo
