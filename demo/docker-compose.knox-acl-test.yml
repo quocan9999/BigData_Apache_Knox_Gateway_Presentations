@@ -1,0 +1,4 @@
+services:
+  knox-gateway:
+    volumes:
+      - ./knox/topologies/demo-guest-allow.xml:/home/knox/knox/conf/topologies/demo.xml:ro

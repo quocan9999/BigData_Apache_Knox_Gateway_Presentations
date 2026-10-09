@@ -1,0 +1,5 @@
+# Chỉ dùng cho kiểm tra fresh volume cô lập; bỏ publish 9870 để tránh đụng
+# cổng của stack baseline. -p cấp một project/volume namespace riêng.
+services:
+  namenode:
+    ports: !override []

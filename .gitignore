@@ -1,0 +1,8 @@
+# Local demo captures, transcripts, and generated evidence
+/demo-backup/*
+!/demo-backup/README.md
+
+# Personal environment files; keep example templates trackable
+**/.env
+**/.env.*
+!**/.env.example

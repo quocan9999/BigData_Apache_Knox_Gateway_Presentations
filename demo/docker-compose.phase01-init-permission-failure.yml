@@ -1,0 +1,4 @@
+services:
+  hdfs-volume-init:
+    # Inject the non-root identity to prove a failed volume repair blocks HDFS startup.
+    user: "1000:100"
