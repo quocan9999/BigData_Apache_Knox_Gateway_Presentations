@@ -98,29 +98,104 @@ Runner xác nhận A–E và các ca LDAP outage/recovery, đảo/khôi phục A
 .\tests\Test-KnoxFailureInjection.ps1 -ProjectName $project -TimeoutSeconds 180
 ```
 
-## Khởi tạo project/volumes sạch
+## Xác minh guard HDFS volumes mới
 
-Compose project name quyết định prefix cho named volumes. `-p` ghi đè top-level Compose `name`; chọn một tên mới để tạo bộ HDFS volumes độc lập. Không bỏ bước xem volume names trước khi `up`:
+Kiểm tra khởi động HDFS độc lập bằng tên project `knox-p01-*`. Test chỉ PASS khi cả hai named volumes chưa tồn tại, HDFS tạo được file mới, và NameNode có một live DataNode. Sau đó chạy guard regression với cùng tên; test phải từ chối vì volumes đã tồn tại và không đổi trạng thái containers:
+
+```powershell
+$hdfsFreshProject = "knox-p01-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+.\tests\Test-FreshHdfsStartup.ps1 -ProjectName $hdfsFreshProject -TimeoutSeconds 180
+.\tests\Test-FreshHdfsStartupGuard.ps1 -ProjectName $hdfsFreshProject
+docker compose -p $hdfsFreshProject -f docker-compose.yml -f docker-compose.phase01-test.yml stop
+```
+
+`docker-compose.phase01-test.yml` không publish NameNode host port. `stop` giữ cả hai HDFS volumes; guard test không khởi động lại project và không xóa volume.
+
+## Kiểm thử trên project/volumes sạch
+
+Compose project name quyết định prefix cho named volumes; mỗi lần chạy hãy chọn tên mới. Project gốc và project mới cùng publish `127.0.0.1:8443`, nên phải dừng project gốc trước. Khối dưới đây giữ nguyên volumes, chờ port được giải phóng, từ chối nếu một trong hai fresh volume đã tồn tại, rồi dùng `finally` để dừng stack kiểm thử và khởi động lại project gốc kể cả khi runner thất bại. Chạy trong cùng cửa sổ PowerShell đã khai báo `$project` và `$compose` ở phần Khởi chạy lần đầu:
 
 ```powershell
 $freshProject = "apache-knox-fresh-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
 $freshCompose = @('-p', $freshProject, '-f', 'docker-compose.yml', '-f', 'docker-compose.knox.yml')
-$freshConfig = docker compose @freshCompose config --format json | ConvertFrom-Json
-$freshVolumes = @($freshConfig.volumes.hdfs_namenode.name, $freshConfig.volumes.hdfs_datanode.name)
-$freshVolumes
-if ($freshVolumes | Where-Object { $_ -notlike "${freshProject}_*" }) { throw 'Fresh project volume prefix mismatch; stop before starting Compose.' }
-$allVolumeNames = @(docker volume ls --format '{{.Name}}')
-if ($LASTEXITCODE -ne 0) { throw 'Could not inspect Docker volumes; stop before starting Compose.' }
-$existingVolumes = @($freshVolumes | Where-Object { $allVolumeNames -contains $_ })
-if ($existingVolumes.Count -gt 0) { throw "Fresh project volumes already exist: $($existingVolumes -join ', '). Choose a new project name before starting Compose." }
+$restoreOriginal = $true
+$freshMayNeedStop = $false
 
-docker compose @freshCompose up -d --wait --wait-timeout 180
-.\scripts\Seed-HdfsDemo.ps1 -ProjectName $freshProject -TimeoutSeconds 180 -IncludeKnoxOverlay
-.\scripts\Seed-HdfsDemo.ps1 -ProjectName $freshProject -TimeoutSeconds 180 -IncludeKnoxOverlay
-.\tests\Test-KnoxDemo.ps1 -ProjectName $freshProject -TimeoutSeconds 180
+function Wait-HostPortReleased {
+  $deadline = [DateTime]::UtcNow.AddSeconds(30)
+  do {
+    $listeners = @(Get-NetTCPConnection -LocalPort 8443 -State Listen -ErrorAction SilentlyContinue)
+    if ($listeners.Count -eq 0) { return }
+    Start-Sleep -Seconds 1
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw 'Host port 127.0.0.1:8443 is still listening; do not start the fresh project.'
+}
+
+try {
+  docker compose @compose stop
+  if ($LASTEXITCODE -ne 0) { throw 'Could not stop the original project; its HDFS volumes were not removed.' }
+  Wait-HostPortReleased
+
+  $freshConfigOutput = docker compose @freshCompose config --format json
+  if ($LASTEXITCODE -ne 0) { throw 'Could not resolve fresh Compose project volumes.' }
+  try { $freshConfig = $freshConfigOutput | ConvertFrom-Json }
+  catch { throw 'Compose did not return valid JSON for the fresh-volume preflight.' }
+  $freshVolumes = @($freshConfig.volumes.hdfs_namenode.name, $freshConfig.volumes.hdfs_datanode.name)
+  $invalidFreshVolumes = @($freshVolumes | Where-Object { [string]::IsNullOrWhiteSpace($_) })
+  if ($freshVolumes.Count -ne 2 -or $invalidFreshVolumes.Count -gt 0) {
+    throw 'Compose did not resolve both HDFS named volumes; stop before startup.'
+  }
+  if ($freshVolumes | Where-Object { -not $_.StartsWith("${freshProject}_", [System.StringComparison]::Ordinal) }) {
+    throw "Fresh project volume prefix mismatch: $($freshVolumes -join ', '); stop before startup."
+  }
+  $allVolumeNames = @(docker volume ls --format '{{.Name}}')
+  if ($LASTEXITCODE -ne 0) { throw 'Could not inspect Docker volumes; stop before startup.' }
+  $existingVolumes = @($freshVolumes | Where-Object { $allVolumeNames -contains $_ })
+  if ($existingVolumes.Count -gt 0) {
+    throw "Fresh-volume preflight refused existing named volumes: $($existingVolumes -join ', '). Choose a different project name."
+  }
+
+  $freshMayNeedStop = $true
+  docker compose @freshCompose up -d --wait --wait-timeout 180
+  if ($LASTEXITCODE -ne 0) { throw 'Fresh-project Compose startup failed.' }
+  .\scripts\Seed-HdfsDemo.ps1 -ProjectName $freshProject -TimeoutSeconds 180 -IncludeKnoxOverlay
+  .\scripts\Seed-HdfsDemo.ps1 -ProjectName $freshProject -TimeoutSeconds 180 -IncludeKnoxOverlay
+  .\scripts\Wait-KnoxReady.ps1 -ProjectName $freshProject -TimeoutSeconds 180
+
+  $runnerPath = Join-Path (Get-Location) 'tests\Test-KnoxDemo.ps1'
+  $powerShellPath = (Get-Process -Id $PID).Path
+  if ([string]::IsNullOrWhiteSpace($powerShellPath) -or -not (Test-Path -LiteralPath $powerShellPath)) {
+    $powerShellPath = 'powershell.exe'
+  }
+  & $powerShellPath -NoProfile -ExecutionPolicy Bypass -File $runnerPath -ProjectName $freshProject -TimeoutSeconds 180
+  if ($LASTEXITCODE -ne 0) { throw 'Fresh-project A–E runner failed; see its log path above.' }
+}
+finally {
+  try {
+    if ($freshMayNeedStop) {
+      docker compose @freshCompose stop
+      if ($LASTEXITCODE -ne 0) { Write-Warning 'Could not stop every fresh-project container; no volumes were removed.' }
+      Wait-HostPortReleased
+    }
+  }
+  finally {
+    if ($restoreOriginal) {
+      docker compose @compose up -d --wait --wait-timeout 180
+      if ($LASTEXITCODE -ne 0) { throw 'Could not restore the original Compose project.' }
+      .\scripts\Seed-HdfsDemo.ps1 -ProjectName $project -TimeoutSeconds 180 -IncludeKnoxOverlay
+      .\scripts\Wait-KnoxReady.ps1 -ProjectName $project -TimeoutSeconds 180
+      $restoredListing = docker compose @compose exec -T namenode hdfs dfs -ls /demo
+      $restoredListingText = $restoredListing -join [Environment]::NewLine
+      if ($LASTEXITCODE -ne 0 -or $restoredListingText -notmatch 'apache-knox\.txt' -or $restoredListingText -notmatch 'bigdata\.txt') {
+        throw "Original project recovery did not confirm both HDFS seed files. Output: $restoredListingText"
+      }
+      Write-Output 'Original project restored; both HDFS files remain on its existing named volumes.'
+    }
+  }
+}
 ```
 
-Chạy seed hai lần để xác nhận lần sau giữ file đã có. Nếu muốn dừng stack kiểm tra sạch, chạy `docker compose @freshCompose down` **không thêm `-v`**. Named volumes của project mới vẫn nằm trên máy và sẽ được dùng lại nếu chạy lại cùng tên; hãy chọn tên project mới cho một lượt thử sạch tiếp theo. Hướng dẫn này xác nhận một bộ volume mới trên máy kiểm thử, không khẳng định đã chạy trên máy tính thứ hai.
+`stop` giữ containers và named volumes; lệnh trên không xóa volume nào. Project kiểm thử cũng được dừng bằng `stop`, nên volumes fresh còn lại để kiểm tra hoặc dùng tên project mới cho lượt fresh tiếp theo. Runner chỉ báo PASS khi A–E và toàn bộ suite/regression hoàn tất.
 
 ## Phục hồi quyền volume
 

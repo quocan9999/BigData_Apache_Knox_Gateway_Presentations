@@ -83,18 +83,27 @@ try {
     throw "Seed rerun overwrote the pre-existing HDFS file: $($preservedAfter.Output)"
   }
   $after = Get-WebHdfsStatus
-  $items = @($after.FileStatuses.FileStatus)
+  $items = @($after.FileStatuses.FileStatus | Where-Object { $null -ne $_ })
   $names = @($items | ForEach-Object { $_.pathSuffix } | Sort-Object)
   $expectedNames = @('apache-knox.txt', 'bigdata.txt')
-  if (($names -join '|') -ne ($expectedNames -join '|')) {
-    throw "Expected exactly the two seed files; WebHDFS returned: $($names -join ', ')"
+  $invalidSeedFiles = @()
+  foreach ($expectedName in $expectedNames) {
+    $matches = @($items | Where-Object { $_.pathSuffix -eq $expectedName })
+    if ($matches.Count -ne 1) {
+      $invalidSeedFiles += $expectedName
+      continue
+    }
+    if ([string]$matches[0].type -ne 'FILE') { $invalidSeedFiles += $expectedName }
+  }
+  if ($invalidSeedFiles.Count -gt 0) {
+    throw "Seed rerun did not preserve/create each required file exactly once as type FILE ($($invalidSeedFiles -join ', ')); WebHDFS returned: $($names -join ', ')"
   }
   $afterItem = @($items | Where-Object pathSuffix -eq 'apache-knox.txt')
   if ($afterItem.Count -ne 1 -or [long]$afterItem[0].modificationTime -ne [long]$beforeItem[0].modificationTime) {
     throw 'Seed rerun changed the existing file metadata or created an unexpected duplicate.'
   }
 
-  Write-Output "PASS: seed reruns preserve existing content and modification time; WebHDFS returned exactly $($names -join ', ')."
+  Write-Output "PASS: seed reruns preserve existing content and modification time; required seed files are present among: $($names -join ', ')."
 }
 finally {
   Pop-Location

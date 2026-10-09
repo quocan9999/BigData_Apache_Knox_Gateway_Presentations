@@ -19,6 +19,8 @@ $testDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("knox-p03-" + [Gui
 $gatewayAuditPath = '/home/knox/knox/logs/gateway-audit.log'
 $gatewayLogPath = '/home/knox/knox/logs/gateway.log'
 $guestAllowedPolicyActive = $false
+$extraFilePath = "/demo/knox-authorization-extra-$([Guid]::NewGuid().ToString('N')).txt"
+$extraFileCreated = $false
 
 function Invoke-Compose {
   param(
@@ -96,11 +98,23 @@ function Assert-WebHdfsList {
   catch {
     throw "$Label did not return WebHDFS JSON: $($Response.Body)"
   }
-  $names = @($json.FileStatuses.FileStatus | ForEach-Object { $_.pathSuffix } | Sort-Object)
-  if (($names -join '|') -ne 'apache-knox.txt|bigdata.txt') {
-    throw "$Label returned unexpected WebHDFS paths: $($names -join ', ')"
+  $items = @($json.FileStatuses.FileStatus | Where-Object { $null -ne $_ })
+  $requiredNames = @('apache-knox.txt', 'bigdata.txt')
+  $invalidRequiredFiles = @()
+  foreach ($requiredName in $requiredNames) {
+    $matches = @($items | Where-Object { $_.pathSuffix -eq $requiredName })
+    if ($matches.Count -ne 1) {
+      $invalidRequiredFiles += $requiredName
+      continue
+    }
+    if ([string]$matches[0].type -ne 'FILE') { $invalidRequiredFiles += $requiredName }
   }
-  Write-Output "$Label PASS: HTTP 200 and real WebHDFS JSON contains $($names -join ', ')."
+  if ($invalidRequiredFiles.Count -gt 0) {
+    $names = @($items | ForEach-Object { $_.pathSuffix } | Sort-Object)
+    throw "$Label did not contain each required seed file exactly once as type FILE ($($invalidRequiredFiles -join ', ')); WebHDFS returned: $($names -join ', ')"
+  }
+  $names = @($items | ForEach-Object { $_.pathSuffix } | Sort-Object)
+  Write-Output "$Label PASS: HTTP 200 and real WebHDFS JSON contains the required seed files; entries: $($names -join ', ')."
 }
 
 function Get-GatewayLogLineCount {
@@ -222,11 +236,25 @@ try {
   $readyScript = Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts\Wait-KnoxReady.ps1'
   & $readyScript -ProjectName $ProjectName -TimeoutSeconds $TimeoutSeconds
 
+  $extraFile = Invoke-Compose -Arguments @('exec', '-T', 'namenode', 'hdfs', 'dfs', '-touchz', $extraFilePath)
+  if ($extraFile.ExitCode -ne 0) {
+    throw "Could not create the temporary additional HDFS file for the list-status regression: $($extraFile.Output)"
+  }
+  $extraFileCreated = $true
+  Write-Output 'REGRESSION ADDITIONAL_HDFS_FILE START'
+
   Write-Output 'SCREEN D START'
   $adminAuditStart = Get-GatewayLogLineCount -Path $script:gatewayAuditPath
   $adminBefore = Get-NameNodeListStatusAuditCount
   $admin = Invoke-KnoxRequest -Username 'admin' -Password 'admin-password'
   Assert-WebHdfsList -Response $admin -Label 'Authorized admin principal'
+  $adminJson = $admin.Body | ConvertFrom-Json
+  $extraFileName = Split-Path -Leaf $extraFilePath
+  $extraFileEntry = @($adminJson.FileStatuses.FileStatus | Where-Object { $_.pathSuffix -eq $extraFileName })
+  if ($extraFileEntry.Count -ne 1 -or $extraFileEntry[0].type -ne 'FILE') {
+    throw "WebHDFS JSON did not include the temporary additional file '$extraFileName' as type FILE."
+  }
+  Write-Output "REGRESSION ADDITIONAL_HDFS_FILE PASS: list-status includes seed files and '$extraFileName'."
   $adminDispatchAuditPattern = '\|WEBHDFS\|admin\|\|\|dispatch\|uri\|http://namenode:9870/webhdfs/v1/demo\?op=LISTSTATUS&user\.name=admin\|success\|Response status: 200'
   $adminDispatchAudit = Assert-FreshGatewayAuditRecord -StartLine $adminAuditStart -Pattern $adminDispatchAuditPattern -Label 'Authorized admin WebHDFS dispatch'
   $adminAccessAuditPattern = '\|WEBHDFS\|admin\|\|\|access\|uri\|/gateway/demo/webhdfs/v1/demo\?op=LISTSTATUS\|success\|Response status: 200'
@@ -319,6 +347,15 @@ finally {
     else {
       try { & $readyScript -ProjectName $ProjectName -TimeoutSeconds $TimeoutSeconds }
       catch { Write-Warning "Default topology was recreated, but readiness verification failed: $($_.Exception.Message)" }
+    }
+  }
+  if ($extraFileCreated) {
+    $cleanupExtraFile = Invoke-Compose -Arguments @('exec', '-T', 'namenode', 'hdfs', 'dfs', '-rm', '-f', $extraFilePath)
+    if ($cleanupExtraFile.ExitCode -ne 0) {
+      Write-Warning "Could not remove temporary regression file '$extraFilePath': $($cleanupExtraFile.Output)"
+    }
+    else {
+      Write-Output 'REGRESSION ADDITIONAL_HDFS_FILE CLEANUP PASS'
     }
   }
   Pop-Location

@@ -34,11 +34,49 @@ function Invoke-Compose {
   [pscustomobject]@{ ExitCode = $exitCode; Output = ($output | Out-String).Trim() }
 }
 
+function Invoke-Docker {
+  param([string[]]$Arguments)
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    $output = & docker @Arguments 2>&1
+    $exitCode = $LASTEXITCODE
+  }
+  finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
+  [pscustomobject]@{ ExitCode = $exitCode; Output = ($output | Out-String).Trim() }
+}
+
 Push-Location $demoRoot
 try {
-  $config = Invoke-Compose -Arguments @('config', '--quiet')
+  $config = Invoke-Compose -Arguments @('config', '--format', 'json')
   if ($config.ExitCode -ne 0 -or $config.Output -match 'level=warning|variable is not set') {
     throw "Compose config failed (exit $($config.ExitCode)): $($config.Output)"
+  }
+  try { $model = $config.Output | ConvertFrom-Json }
+  catch { throw "Compose did not return valid JSON for named-volume preflight: $($config.Output)" }
+
+  $freshVolumes = @(
+    [string]$model.volumes.hdfs_namenode.name,
+    [string]$model.volumes.hdfs_datanode.name
+  )
+  if ($freshVolumes.Count -ne 2 -or @($freshVolumes | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
+    throw "Compose did not resolve exactly two HDFS named volumes for project '$ProjectName'."
+  }
+  $expectedPrefix = "${ProjectName}_"
+  if (@($freshVolumes | Where-Object { -not $_.StartsWith($expectedPrefix, [System.StringComparison]::Ordinal) }).Count -gt 0) {
+    throw "Fresh project volume prefix mismatch; expected '$expectedPrefix*' but Compose resolved: $($freshVolumes -join ', ')"
+  }
+
+  $volumeList = Invoke-Docker -Arguments @('volume', 'ls', '--format', '{{.Name}}')
+  if ($volumeList.ExitCode -ne 0) {
+    throw "Could not inspect Docker volumes (exit $($volumeList.ExitCode)): $($volumeList.Output)"
+  }
+  $allVolumeNames = @($volumeList.Output -split '\r?\n' | Where-Object { $_ })
+  $existingVolumes = @($freshVolumes | Where-Object { $allVolumeNames -contains $_ })
+  if ($existingVolumes.Count -gt 0) {
+    throw "Fresh-volume preflight refused existing named volumes: $($existingVolumes -join ', '). Choose a different project name; volumes are never removed by this test."
   }
 
   $start = Invoke-Compose -Arguments @('up', '-d', '--wait', '--wait-timeout', "$TimeoutSeconds")
@@ -61,7 +99,15 @@ try {
     throw "Fresh-volume NameNode HTTP probe failed (exit $($http.ExitCode), status '$($http.Output)')."
   }
 
-  Write-Output "PASS: fresh project '$ProjectName' has NameNode HTTP 200 and Live datanodes (1)."
+  $freshFilePath = "/demo/fresh-startup-$([Guid]::NewGuid().ToString('N')).txt"
+  $mkdir = Invoke-Compose -Arguments @('exec', '-T', 'namenode', 'hdfs', 'dfs', '-mkdir', '-p', '/demo')
+  if ($mkdir.ExitCode -ne 0) { throw "Could not create the fresh HDFS data path /demo: $($mkdir.Output)" }
+  $touch = Invoke-Compose -Arguments @('exec', '-T', 'namenode', 'hdfs', 'dfs', '-touchz', $freshFilePath)
+  if ($touch.ExitCode -ne 0) { throw "Could not write to the fresh HDFS data path '$freshFilePath': $($touch.Output)" }
+  $verifyFile = Invoke-Compose -Arguments @('exec', '-T', 'namenode', 'hdfs', 'dfs', '-test', '-f', $freshFilePath)
+  if ($verifyFile.ExitCode -ne 0) { throw "Fresh HDFS data path did not retain '$freshFilePath': $($verifyFile.Output)" }
+
+  Write-Output "PASS: fresh project '$ProjectName' used absent volumes '$($freshVolumes -join ', ')', reached NameNode HTTP 200 with one live DataNode, and wrote '$freshFilePath'."
   Write-Output 'The isolated project is left running for inspection; its named volumes are not removed.'
 }
 finally {

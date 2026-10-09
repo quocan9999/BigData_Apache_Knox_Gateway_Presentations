@@ -110,13 +110,24 @@ function Invoke-ValidRequest {
   catch {
     throw "$Label did not return JSON: $($response.Body)"
   }
-  $names = @($json.FileStatuses.FileStatus | ForEach-Object { $_.pathSuffix } | Sort-Object)
-  $expected = @('apache-knox.txt', 'bigdata.txt')
-  if (($names -join '|') -ne ($expected -join '|')) {
-    throw "$Label returned unexpected WebHDFS paths: $($names -join ', ')"
+  $items = @($json.FileStatuses.FileStatus | Where-Object { $null -ne $_ })
+  $requiredNames = @('apache-knox.txt', 'bigdata.txt')
+  $invalidRequiredFiles = @()
+  foreach ($requiredName in $requiredNames) {
+    $matches = @($items | Where-Object { $_.pathSuffix -eq $requiredName })
+    if ($matches.Count -ne 1) {
+      $invalidRequiredFiles += $requiredName
+      continue
+    }
+    if ([string]$matches[0].type -ne 'FILE') { $invalidRequiredFiles += $requiredName }
   }
+  if ($invalidRequiredFiles.Count -gt 0) {
+    $names = @($items | ForEach-Object { $_.pathSuffix } | Sort-Object)
+    throw "$Label did not contain each required seed file exactly once as type FILE ($($invalidRequiredFiles -join ', ')); WebHDFS returned: $($names -join ', ')"
+  }
+  $names = @($items | ForEach-Object { $_.pathSuffix } | Sort-Object)
   $attemptSummary = if ($attempt -gt 1) { " after $attempt attempts" } else { '' }
-  Write-Output "$Label PASS${attemptSummary}: HTTP 200 and real WebHDFS JSON contains $($names -join ', ')."
+  Write-Output "$Label PASS${attemptSummary}: HTTP 200 and real WebHDFS JSON contains the required seed files; entries: $($names -join ', ')."
 }
 
 New-Item -ItemType Directory -Path $testDirectory -Force | Out-Null

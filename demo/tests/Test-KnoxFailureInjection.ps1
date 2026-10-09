@@ -88,11 +88,23 @@ function Assert-WebHdfsList {
   }
   try { $json = $Response.Body | ConvertFrom-Json }
   catch { throw "$Label did not return valid WebHDFS JSON: $($Response.Body)" }
-  $names = @($json.FileStatuses.FileStatus | ForEach-Object { $_.pathSuffix } | Sort-Object)
-  if (($names -join '|') -ne 'apache-knox.txt|bigdata.txt') {
-    throw "$Label returned unexpected HDFS paths: $($names -join ', ')"
+  $items = @($json.FileStatuses.FileStatus | Where-Object { $null -ne $_ })
+  $requiredNames = @('apache-knox.txt', 'bigdata.txt')
+  $invalidRequiredFiles = @()
+  foreach ($requiredName in $requiredNames) {
+    $matches = @($items | Where-Object { $_.pathSuffix -eq $requiredName })
+    if ($matches.Count -ne 1) {
+      $invalidRequiredFiles += $requiredName
+      continue
+    }
+    if ([string]$matches[0].type -ne 'FILE') { $invalidRequiredFiles += $requiredName }
   }
-  Write-Output "$Label PASS: HTTP 200 WebHDFS JSON contains $($names -join ', ')."
+  if ($invalidRequiredFiles.Count -gt 0) {
+    $names = @($items | ForEach-Object { $_.pathSuffix } | Sort-Object)
+    throw "$Label did not contain each required seed file exactly once as type FILE ($($invalidRequiredFiles -join ', ')); HDFS paths: $($names -join ', ')"
+  }
+  $names = @($items | ForEach-Object { $_.pathSuffix } | Sort-Object)
+  Write-Output "$Label PASS: HTTP 200 WebHDFS JSON contains the required seed files; entries: $($names -join ', ')."
 }
 
 function Get-GatewayLogLineCount {

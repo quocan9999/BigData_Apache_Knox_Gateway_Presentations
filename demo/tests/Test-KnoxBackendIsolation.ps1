@@ -212,10 +212,20 @@ function Invoke-KnoxList {
     }
   } | Sort-Object Path)
   $names = @($entries | ForEach-Object { $_.Path })
-  if (($names -join '|') -ne 'apache-knox.txt|bigdata.txt') {
-    throw "Authorized Knox request returned unexpected real HDFS paths: $($names -join ', ')"
+  $requiredNames = @('apache-knox.txt', 'bigdata.txt')
+  $invalidRequiredFiles = @()
+  foreach ($requiredName in $requiredNames) {
+    $matches = @($entries | Where-Object { $_.Path -eq $requiredName })
+    if ($matches.Count -ne 1) {
+      $invalidRequiredFiles += $requiredName
+      continue
+    }
+    if ($matches[0].Type -ne 'FILE') { $invalidRequiredFiles += $requiredName }
   }
-  Write-Host "Knox backend PASS: HTTP 200 WebHDFS JSON contains $($names -join ', ')."
+  if ($invalidRequiredFiles.Count -gt 0) {
+    throw "Authorized Knox request did not contain each required seed file exactly once as type FILE ($($invalidRequiredFiles -join ', ')); real HDFS paths: $($names -join ', ')"
+  }
+  Write-Host "Knox backend PASS: HTTP 200 WebHDFS JSON contains the required seed files; entries: $($names -join ', ')."
   return ,$entries
 }
 
