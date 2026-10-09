@@ -45,7 +45,17 @@ Check the resolved Compose mappings and run the isolation/restart check from Pow
 
 The test inspects Docker Engine port bindings, confirms Windows has no listener on 9870, expects a direct host curl.exe connection to fail, then confirms the admin route through Knox still returns both HDFS files. It restarts HDFS, LDAP, and Knox services and repeats the checks without deleting the named volumes.
 
-## Run the end-to-end checks
+## Run the full five-screen demo
+
+Run the complete real-stack suite from the `demo` directory in PowerShell:
+
+```powershell
+.\tests\Test-KnoxDemo.ps1 -TimeoutSeconds 180
+```
+
+The runner checks Docker and Compose, waits for HDFS and Knox before each suite, and prints `PASS`, `FAIL`, or `BLOCKED` for screens A–E and each child suite. It also reports LDAP outage/recovery, ACL reversal/restoration, missing-route, backend-down/recovery, readiness-timeout/recovery, and final stack recovery. The command exits zero only when every screen, suite, and regression group passes. Each child suite has a full log under the printed `%TEMP%\knox-demo-v1-*` directory; the logs stay on this machine and the checks do not print passwords.
+
+To run individual suites instead, use these commands:
 
 The authentication test starts or waits for the Compose stack, seeds the expected HDFS files idempotently, verifies the unauthenticated challenge, checks admin and invalid credentials, stops LDAP to verify authentication failure, then restores LDAP and checks recovery:
 
@@ -57,6 +67,12 @@ The authorization test verifies the real default policy (admin allowed, guest de
 
 ```powershell
 .\tests\Test-KnoxAuthorization.ps1 -TimeoutSeconds 180
+```
+
+The failure-injection test checks a missing service route, a stopped NameNode, and a deliberately failing Gateway health check. It restores the normal stack and verifies the admin WebHDFS listing after each injection:
+
+```powershell
+.\tests\Test-KnoxFailureInjection.ps1 -TimeoutSeconds 180
 ```
 
 ## Stop the demo

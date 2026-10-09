@@ -242,6 +242,7 @@ function Assert-KnoxDnsAndBackendForwarding {
 New-Item -ItemType Directory -Path $testDirectory -Force | Out-Null
 Push-Location $demoRoot
 try {
+  Write-Output 'SCREEN A START'
   Assert-ComposePortIsolation
 
   $config = Invoke-Compose -Arguments @('config', '--quiet')
@@ -290,6 +291,7 @@ try {
   if ($states.ExitCode -ne 0) { throw "Could not capture final Compose status: $($states.Output)" }
   Write-Output 'Final Compose status:'
   Write-Output $states.Output
+  Write-Output 'SCREEN A PASS: only Knox is host-published and the real WebHDFS listing survives the full service restart.'
   Write-Output 'Backend isolation phase test PASS.'
 }
 finally {

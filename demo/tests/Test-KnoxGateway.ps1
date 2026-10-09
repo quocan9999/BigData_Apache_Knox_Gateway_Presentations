@@ -15,6 +15,7 @@ $composePrefix = @(
   '-f', 'docker-compose.knox.yml'
 )
 $testDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("knox-p02-" + [Guid]::NewGuid().ToString('N'))
+$gatewayAuditPath = '/home/knox/knox/logs/gateway-audit.log'
 $ldapStopped = $false
 
 function Invoke-Compose {
@@ -32,6 +33,17 @@ function Invoke-Compose {
     $ErrorActionPreference = $previousErrorActionPreference
   }
   [pscustomobject]@{ ExitCode = $exitCode; Output = ($output | Out-String).Trim() }
+}
+
+function Get-GatewayAuditLineCount {
+  $result = Invoke-Compose -Arguments @('exec', '-T', 'knox-gateway', 'wc', '-l', $script:gatewayAuditPath)
+  if ($result.ExitCode -ne 0) { throw "Could not capture the Knox audit offset: $($result.Output)" }
+  [int](($result.Output -split '\s+')[0])
+}
+
+function Get-GatewayAuditSince {
+  param([int]$StartLine)
+  Invoke-Compose -Arguments @('exec', '-T', 'knox-gateway', 'tail', '-n', "+$($StartLine + 1)", $script:gatewayAuditPath)
 }
 
 function Invoke-KnoxRequest {
@@ -127,6 +139,8 @@ try {
   $invalidLogCountResult = Invoke-Compose -Arguments @('exec', '-T', 'knox-gateway', 'wc', '-l', '/home/knox/knox/logs/gateway.log')
   if ($invalidLogCountResult.ExitCode -ne 0) { throw "Could not capture the Gateway log offset: $($invalidLogCountResult.Output)" }
   $invalidLogStart = [int](($invalidLogCountResult.Output -split '\s+')[0])
+  Write-Output 'SCREEN B START'
+  $invalidAuditStart = Get-GatewayAuditLineCount
   $invalid = Invoke-KnoxRequest -Username 'admin' -Password 'wrong-password'
   if ($invalid.ExitCode -ne 0 -or $invalid.StatusCode -ne '401' -or
       $invalid.Headers -notmatch '(?im)^WWW-Authenticate:\s*Basic') {
@@ -136,12 +150,20 @@ try {
   if ($invalidLogs.ExitCode -ne 0 -or $invalidLogs.Output -notmatch 'INVALID_CREDENTIALS') {
     throw "HTTP 401 was returned, but Knox's LDAP invalid-credential log evidence was missing: $($invalidLogs.Output)"
   }
+  $invalidAudit = Get-GatewayAuditSince -StartLine $invalidAuditStart
+  $invalidAuditPattern = '\|WEBHDFS\|\|\|\|authentication\|principal\|admin\|failure\|LDAP authentication failed\.'
+  if ($invalidAudit.ExitCode -ne 0 -or $invalidAudit.Output -notmatch $invalidAuditPattern) {
+    throw "HTTP 401 and INVALID_CREDENTIALS were observed, but the fresh Knox authentication/principal/admin/failure audit event was missing: $($invalidAudit.Output)"
+  }
   Write-Output 'PASS: wrong password was rejected at Knox with HTTP 401 and a Basic challenge.'
   Write-Output $invalidLogs.Output
+  Write-Output 'SCREEN B PASS: Knox rejected the invalid password with HTTP 401, INVALID_CREDENTIALS, and an authentication failure audit event for principal admin.'
+  Write-Output (($invalidAudit.Output -split '\r?\n' | Where-Object { $_ -match $invalidAuditPattern }) -join [Environment]::NewLine)
 
   $ldapLogCountResult = Invoke-Compose -Arguments @('exec', '-T', 'knox-gateway', 'wc', '-l', '/home/knox/knox/logs/gateway.log')
   if ($ldapLogCountResult.ExitCode -ne 0) { throw "Could not capture the Gateway log offset: $($ldapLogCountResult.Output)" }
   $ldapLogStart = [int](($ldapLogCountResult.Output -split '\s+')[0])
+  Write-Output 'REGRESSION LDAP_OUTAGE START'
   $stop = Invoke-Compose -Arguments @('stop', 'knox-ldap')
   if ($stop.ExitCode -ne 0) { throw "Could not stop LDAP for the negative test: $($stop.Output)" }
   $ldapStopped = $true
@@ -164,6 +186,7 @@ try {
 
   & $readyScript -ProjectName $ProjectName -TimeoutSeconds $TimeoutSeconds
   Invoke-ValidRequest -Label 'LDAP recovery'
+  Write-Output 'REGRESSION LDAP_OUTAGE PASS: valid credentials failed while LDAP was stopped, then authenticated successfully after LDAP recovery.'
 }
 finally {
   if ($ldapStopped) {
