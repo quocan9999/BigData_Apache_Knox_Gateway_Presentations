@@ -6,13 +6,18 @@ param(
   [int]$TimeoutSeconds = 180,
 
   [ValidateRange(1, 30)]
-  [int]$PollIntervalSeconds = 3
+  [int]$PollIntervalSeconds = 3,
+
+  [switch]$IncludeKnoxOverlay
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $demoRoot = Split-Path -Parent $PSScriptRoot
 $composePrefix = @('compose', '-p', $ProjectName)
+if ($IncludeKnoxOverlay) {
+  $composePrefix += @('-f', 'docker-compose.yml', '-f', 'docker-compose.knox.yml')
+}
 
 function Invoke-Compose {
   param([string[]]$Arguments)

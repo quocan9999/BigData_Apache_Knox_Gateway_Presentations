@@ -3,13 +3,18 @@ param(
   [string]$ProjectName = 'apache-knox-bigdata-demo',
 
   [ValidateRange(1, 600)]
-  [int]$TimeoutSeconds = 180
+  [int]$TimeoutSeconds = 180,
+
+  [switch]$IncludeKnoxOverlay
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $demoRoot = Split-Path -Parent $PSScriptRoot
 $composePrefix = @('compose', '-p', $ProjectName)
+if ($IncludeKnoxOverlay) {
+  $composePrefix += @('-f', 'docker-compose.yml', '-f', 'docker-compose.knox.yml')
+}
 
 function Invoke-Compose {
   param([string[]]$Arguments)
@@ -28,7 +33,7 @@ function Invoke-Compose {
 
 Push-Location $demoRoot
 try {
-  & (Join-Path $PSScriptRoot 'Wait-HdfsReady.ps1') -ProjectName $ProjectName -TimeoutSeconds $TimeoutSeconds
+  & (Join-Path $PSScriptRoot 'Wait-HdfsReady.ps1') -ProjectName $ProjectName -TimeoutSeconds $TimeoutSeconds -IncludeKnoxOverlay:$IncludeKnoxOverlay
 
   $seedCommand = @'
 set -eu
