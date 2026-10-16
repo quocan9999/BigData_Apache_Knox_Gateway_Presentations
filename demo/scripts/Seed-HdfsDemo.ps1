@@ -54,6 +54,7 @@ seed_if_missing() {
 seed_if_missing /demo/apache-knox.txt
 seed_if_missing /demo/bigdata.txt
 '@
+  $seedCommand = $seedCommand.Replace("`r`n", "`n")
   $seed = Invoke-Compose -Arguments @('exec', '-T', 'namenode', 'bash', '-ec', $seedCommand)
   if ($seed.ExitCode -ne 0) {
     throw "HDFS seed failed (exit $($seed.ExitCode)): $($seed.Output)"
