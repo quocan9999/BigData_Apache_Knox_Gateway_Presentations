@@ -24,8 +24,7 @@ function Invoke-Compose {
   $dockerArguments = $script:composePrefix + $Arguments
   $previousErrorActionPreference = $ErrorActionPreference
   try {
-    # Windows PowerShell 5.1 can promote native stderr progress to an error;
-    # process exit codes remain the authority for Docker/Hadoop commands.
+    # PowerShell 5.1 có thể coi stderr tiến trình native là lỗi PowerShell; mã thoát tiến trình vẫn quyết định kết quả Docker/Hadoop.
     $ErrorActionPreference = 'Continue'
     $output = & docker @dockerArguments 2>&1
     $exitCode = $LASTEXITCODE
@@ -44,6 +43,7 @@ try {
   $lastReport = $null
   $liveCount = 'unknown'
 
+  # Chỉ coi HDFS sẵn sàng khi NameNode trả HTTP 200, DataNode đang chạy và NameNode xác nhận đúng một DataNode sống.
   while ([DateTime]::UtcNow -lt $deadline) {
     $lastHttp = Invoke-Compose -Arguments @(
       'exec', '-T', 'namenode', 'curl', '--silent', '--show-error',

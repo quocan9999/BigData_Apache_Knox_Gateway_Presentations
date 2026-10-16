@@ -16,12 +16,13 @@ $composePrefix = @(
 )
 $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $logDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("knox-demo-v1-$timestamp-" + [Guid]::NewGuid().ToString('N'))
-$screenResults = [ordered]@{ A = 'BLOCKED'; B = 'BLOCKED'; C = 'BLOCKED'; D = 'BLOCKED'; E = 'BLOCKED' }
+$screenResults = [ordered]@{ A = 'BLOCKED'; B = 'BLOCKED'; C = 'BLOCKED'; D = 'BLOCKED'; E = 'BLOCKED'; F = 'BLOCKED' }
 $suiteResults = [ordered]@{
   ISOLATION = 'BLOCKED'
   AUTHENTICATION = 'BLOCKED'
   AUTHORIZATION = 'BLOCKED'
   FAILURE_INJECTION = 'BLOCKED'
+  WEBHDFS_REDIRECT = 'BLOCKED'
 }
 $regressionResults = [ordered]@{
   LDAP_OUTAGE = 'BLOCKED'
@@ -37,6 +38,7 @@ $screenMarkers = @{
   C = @{ Start = 'SCREEN C START'; Pass = 'SCREEN C PASS' }
   D = @{ Start = 'SCREEN D START'; Pass = 'SCREEN D PASS' }
   E = @{ Start = 'SCREEN E START'; Pass = 'SCREEN E PASS' }
+  F = @{ Start = 'SCREEN F START'; Pass = 'SCREEN F PASS'; Blocked = 'SCREEN F BLOCKED' }
 }
 $regressionMarkers = @{
   LDAP_OUTAGE = @{ Start = 'REGRESSION LDAP_OUTAGE START'; Pass = 'REGRESSION LDAP_OUTAGE PASS' }
@@ -89,12 +91,18 @@ function Get-MarkerStatus {
     [string]$LogPath,
     [string]$StartMarker,
     [string]$PassMarker,
+    [string]$BlockedMarker,
     [int]$ChildExitCode,
     [bool]$GatePassed,
-    [bool]$PriorMarkerObserved
+    [bool]$PriorMarkerObserved,
+    [bool]$RequireSuccessfulChild
   )
   if (-not $GatePassed) { return 'BLOCKED' }
-  if (Test-LogMarker -Path $LogPath -Marker $PassMarker) { return 'PASS' }
+  if (-not [string]::IsNullOrWhiteSpace($BlockedMarker) -and (Test-LogMarker -Path $LogPath -Marker $BlockedMarker)) { return 'BLOCKED' }
+  if (Test-LogMarker -Path $LogPath -Marker $PassMarker) {
+    if ($RequireSuccessfulChild -and $ChildExitCode -ne 0) { return 'FAIL' }
+    return 'PASS'
+  }
   if (Test-LogMarker -Path $LogPath -Marker $StartMarker) { return 'FAIL' }
   if ($ChildExitCode -eq 0 -or -not $PriorMarkerObserved) { return 'FAIL' }
   return 'BLOCKED'
@@ -137,7 +145,8 @@ function Invoke-Suite {
     [string]$ResultKey,
     [string]$ScriptName,
     [string[]]$ScreenKeys,
-    [string[]]$RegressionKeys
+    [string[]]$RegressionKeys,
+    [switch]$RequireSuccessfulChild
   )
   if (-not $continueSuites) {
     $suiteResults[$ResultKey] = 'BLOCKED'
@@ -170,13 +179,14 @@ function Invoke-Suite {
   $priorMarkerObserved = $false
   foreach ($key in $ScreenKeys) {
     $markers = $screenMarkers[$key]
-    $screenResults[$key] = Get-MarkerStatus -LogPath $logPath -StartMarker $markers.Start -PassMarker $markers.Pass -ChildExitCode $childResult.ExitCode -GatePassed $true -PriorMarkerObserved $priorMarkerObserved
+    $blockedMarker = if ($markers.ContainsKey('Blocked')) { $markers.Blocked } else { '' }
+    $screenResults[$key] = Get-MarkerStatus -LogPath $logPath -StartMarker $markers.Start -PassMarker $markers.Pass -BlockedMarker $blockedMarker -ChildExitCode $childResult.ExitCode -GatePassed $true -PriorMarkerObserved $priorMarkerObserved -RequireSuccessfulChild:$RequireSuccessfulChild
     if ($screenResults[$key] -ne 'BLOCKED' -or (Test-LogMarker -Path $logPath -Marker $markers.Start) -or (Test-LogMarker -Path $logPath -Marker $markers.Pass)) { $priorMarkerObserved = $true }
   }
   $priorMarkerObserved = $false
   foreach ($key in $RegressionKeys) {
     $markers = $regressionMarkers[$key]
-    $regressionResults[$key] = Get-MarkerStatus -LogPath $logPath -StartMarker $markers.Start -PassMarker $markers.Pass -ChildExitCode $childResult.ExitCode -GatePassed $true -PriorMarkerObserved $priorMarkerObserved
+    $regressionResults[$key] = Get-MarkerStatus -LogPath $logPath -StartMarker $markers.Start -PassMarker $markers.Pass -BlockedMarker '' -ChildExitCode $childResult.ExitCode -GatePassed $true -PriorMarkerObserved $priorMarkerObserved -RequireSuccessfulChild:$false
     if ($regressionResults[$key] -ne 'BLOCKED' -or (Test-LogMarker -Path $logPath -Marker $markers.Start) -or (Test-LogMarker -Path $logPath -Marker $markers.Pass)) { $priorMarkerObserved = $true }
   }
 }
@@ -184,9 +194,9 @@ function Invoke-Suite {
 function Write-Summary {
   Write-Output "Local run logs: $logDirectory"
   Write-Output 'Screens:'
-  foreach ($key in @('A', 'B', 'C', 'D', 'E')) { Write-Output "  Screen $key`: $($screenResults[$key])" }
+  foreach ($key in @('A', 'B', 'C', 'D', 'E', 'F')) { Write-Output "  Screen $key`: $($screenResults[$key])" }
   Write-Output 'Suite status:'
-  foreach ($key in @('ISOLATION', 'AUTHENTICATION', 'AUTHORIZATION', 'FAILURE_INJECTION')) { Write-Output "  $key`: $($suiteResults[$key])" }
+  foreach ($key in @('ISOLATION', 'AUTHENTICATION', 'AUTHORIZATION', 'FAILURE_INJECTION', 'WEBHDFS_REDIRECT')) { Write-Output "  $key`: $($suiteResults[$key])" }
   Write-Output 'Regression and failure-injection groups:'
   foreach ($key in @('LDAP_OUTAGE', 'ACL_REVERSAL', 'MISSING_ROUTE', 'BACKEND_DOWN_AND_RECOVERY', 'READINESS_TIMEOUT_AND_RECOVERY', 'FINAL_STACK_RECOVERY')) {
     Write-Output "  $key`: $($regressionResults[$key])"
@@ -210,6 +220,7 @@ try {
   Invoke-Suite -SuiteName '02-screen-b-authentication' -ResultKey 'AUTHENTICATION' -ScriptName 'Test-KnoxGateway.ps1' -ScreenKeys @('B') -RegressionKeys @('LDAP_OUTAGE')
   Invoke-Suite -SuiteName '03-screens-cde-authorization' -ResultKey 'AUTHORIZATION' -ScriptName 'Test-KnoxAuthorization.ps1' -ScreenKeys @('D', 'C', 'E') -RegressionKeys @('ACL_REVERSAL')
   Invoke-Suite -SuiteName '04-failure-injection' -ResultKey 'FAILURE_INJECTION' -ScriptName 'Test-KnoxFailureInjection.ps1' -ScreenKeys @() -RegressionKeys @('MISSING_ROUTE', 'BACKEND_DOWN_AND_RECOVERY', 'READINESS_TIMEOUT_AND_RECOVERY', 'FINAL_STACK_RECOVERY')
+  Invoke-Suite -SuiteName '05-screen-f-webhdfs-redirect' -ResultKey 'WEBHDFS_REDIRECT' -ScriptName 'Test-KnoxWebHdfsRedirect.ps1' -ScreenKeys @('F') -RegressionKeys @() -RequireSuccessfulChild
 }
 finally {
   Pop-Location

@@ -42,7 +42,7 @@ Admin được phép gọi WebHDFS thật qua Knox. JSON phải có `apache-knox
 curl.exe --noproxy '*' --insecure --include --user 'admin:admin-password' 'https://127.0.0.1:8443/gateway/demo/webhdfs/v1/demo?op=LISTSTATUS'
 ```
 
-Các kết quả đã quan sát và dùng trong năm màn demo:
+Các kết quả đã quan sát trong Screens A–E:
 
 | Ca | Lệnh/hành vi | Expected và observed | Nguồn kết quả |
 |---|---|---|---|
@@ -81,7 +81,33 @@ NameNode audit là bằng chứng backend xử lý `listStatus`; quyết định
 
 Khi trình bày nguồn lỗi, đối chiếu event mới sinh với `principal`, `action`, URI, `outcome`, HTTP status và request ID nếu field hiện diện. HTTP status đứng riêng không đủ chứng minh thành phần từ chối.
 
-## Chạy test A–E và các ca lỗi
+## Screen F — WebHDFS OPEN, HTTP 307 và URL Rewrite
+
+Screen F dùng file HDFS không rỗng riêng `/demo/knox-screen-f.txt`. Test tạo file nếu chưa tồn tại; nếu file đã có, test chỉ dùng lại khi kích thước và SHA-256 khớp, còn nội dung khác hoặc entry không phải file thì test dừng mà không ghi đè. Hai seed file cũ không bị thay đổi.
+
+Kết quả kiểm chứng thật trên Knox `3.0.0-release` với image digest đã pin trong Compose:
+
+| Bước | Expected | Observed | Bằng chứng |
+|---|---|---|---|
+| F2 — NameNode OPEN | HTTP 307 với Location trỏ tới DataNode bên trong Docker network | HTTP 307; `http://datanode:9864/webhdfs/v1/demo/knox-screen-f.txt?...` | Request WebHDFS trực tiếp từ container; test không follow redirect |
+| F3 — Knox rewrite | Location cùng authority `https://127.0.0.1:8443`, qua route WebHDFS DataNode của Gateway | HTTP 307 tới `/gateway/demo/webhdfs/data/v1/webhdfs/v1/demo/knox-screen-f.txt?_=<encrypted>` | Response thật từ Knox; test chỉ tiếp tục khi scheme/host/port khớp Gateway và query đã được mã hóa |
+| F4 — Đọc nội dung | HTTP 200, nội dung không rỗng và khớp byte/hash file HDFS | 102 bytes; SHA-256 `88a02dbd3b332f62b7efc3ab4bbf20dd9edf83bc4fb4971178db9bed23008e3b` | Hash của file tải qua route Gateway so với giá trị độc lập đã pin trong test |
+| Negative | Mật khẩu admin sai bị từ chối; guest hợp lệ bị ACL chặn trước backend | HTTP 401 và HTTP 403; Knox audit ghi authentication failure và authorization failure | Audit mới của Knox; không có dispatch HDFS thành công cho guest |
+
+Knox audit phân biệt dispatch OPEN đầu tiên tới `namenode:9870` trả 307 với dispatch tiếp theo tới `datanode:9864` trả 200. NameNode audit ghi `cmd=open src=/demo/knox-screen-f.txt proto=webhdfs`. Query đã mã hóa trong Location không được in ra log demo; test in authority/path và digest để dễ trình bày.
+
+Lệnh chạy riêng Screen F hoặc toàn bộ runner A–F, từ thư mục `demo/`:
+
+```powershell
+.\tests\Test-KnoxWebHdfsRedirect.ps1 -ProjectName $project -TimeoutSeconds 180
+.\tests\Test-KnoxDemo.ps1 -ProjectName $project -TimeoutSeconds 180
+```
+
+Trình bày Screen F trong 2–3 phút: chạy test riêng; chỉ ra F2 HTTP 307 và host DataNode nội bộ; chỉ ra F3 Location đã quay về authority Gateway; cuối cùng đối chiếu HTTP 200, 102 bytes, SHA-256 và hai dòng Knox dispatch. Test tự follow Location sau khi xác nhận cùng Gateway, không dùng `--location-trusted` và không yêu cầu Windows kết nối DataNode.
+
+Phần kiểm chứng NameNode 307 gọi backend trực tiếp từ Docker network với `user.name=hadoop` để quan sát redirect; request này không phải bằng chứng client đã qua Knox hay được LDAP xác thực. Bằng chứng Knox riêng là request `admin` qua HTTPS Gateway, Location đã rewrite, audit dispatch tới NameNode/DataNode và hash nội dung nhận về. Kết quả route/Location được pin với Knox image hiện tại; không khẳng định mọi phiên bản Knox đều có cùng URL.
+
+## Chạy test A–F và các ca lỗi
 
 Runner dùng stack thật; trả exit code khác 0 nếu bất kỳ screen, suite hoặc nhóm regression nào thất bại:
 
@@ -89,7 +115,7 @@ Runner dùng stack thật; trả exit code khác 0 nếu bất kỳ screen, suit
 .\tests\Test-KnoxDemo.ps1 -ProjectName $project -TimeoutSeconds 180
 ```
 
-Runner xác nhận A–E và các ca LDAP outage/recovery, đảo/khôi phục ACL, missing route, backend down/recovery, readiness timeout/recovery, restart và final stack recovery. Kết quả chi tiết được ghi trong thư mục `%TEMP%\knox-demo-v1-*` do runner in ra. Giữ log ở máy chạy; không commit log, transcript, credentials hoặc volume data. Có thể xem suite riêng bằng:
+Runner xác nhận A–F và các ca LDAP outage/recovery, đảo/khôi phục ACL, missing route, backend down/recovery, readiness timeout/recovery, restart và final stack recovery. Kết quả chi tiết được ghi trong thư mục `%TEMP%\knox-demo-v1-*` do runner in ra. Giữ log ở máy chạy; không commit log, transcript, credentials hoặc volume data. Có thể xem suite riêng bằng:
 
 ```powershell
 .\tests\Test-KnoxBackendIsolation.ps1 -ProjectName $project -TimeoutSeconds 180
@@ -168,7 +194,7 @@ try {
     $powerShellPath = 'powershell.exe'
   }
   & $powerShellPath -NoProfile -ExecutionPolicy Bypass -File $runnerPath -ProjectName $freshProject -TimeoutSeconds 180
-  if ($LASTEXITCODE -ne 0) { throw 'Fresh-project A–E runner failed; see its log path above.' }
+  if ($LASTEXITCODE -ne 0) { throw 'Fresh-project A–F runner failed; see its log path above.' }
 }
 finally {
   try {
@@ -195,7 +221,7 @@ finally {
 }
 ```
 
-`stop` giữ containers và named volumes; lệnh trên không xóa volume nào. Project kiểm thử cũng được dừng bằng `stop`, nên volumes fresh còn lại để kiểm tra hoặc dùng tên project mới cho lượt fresh tiếp theo. Runner chỉ báo PASS khi A–E và toàn bộ suite/regression hoàn tất.
+`stop` giữ containers và named volumes; lệnh trên không xóa volume nào. Project kiểm thử cũng được dừng bằng `stop`, nên volumes fresh còn lại để kiểm tra hoặc dùng tên project mới cho lượt fresh tiếp theo. Runner chỉ báo PASS khi A–F và toàn bộ suite/regression hoàn tất.
 
 ## Phục hồi quyền volume
 

@@ -61,6 +61,7 @@
     <role>NAMENODE</role>
     <url>hdfs://namenode:8020</url>
   </service>
+  <!-- Service Definition WEBHDFS của Knox viết lại Location 307 của DataNode thành route Gateway; Screen F kiểm chứng cả dispatch lẫn nội dung thực. -->
   <service>
     <role>WEBHDFS</role>
     <url>http://namenode:9870/webhdfs</url>

@@ -33,6 +33,7 @@ function Invoke-Compose {
 
 Push-Location $demoRoot
 try {
+  # Tạo hai file seed theo cách idempotent; file đã có được giữ nguyên để bảo toàn dữ liệu HDFS hiện hữu.
   & (Join-Path $PSScriptRoot 'Wait-HdfsReady.ps1') -ProjectName $ProjectName -TimeoutSeconds $TimeoutSeconds -IncludeKnoxOverlay:$IncludeKnoxOverlay
 
   $seedCommand = @'
@@ -54,6 +55,8 @@ seed_if_missing() {
 seed_if_missing /demo/apache-knox.txt
 seed_if_missing /demo/bigdata.txt
 '@
+  # PowerShell trên Windows giữ CRLF trong here-string; chuẩn hóa sang LF để bash trong container đọc đúng tùy chọn đầu tiên.
+  $seedCommand = $seedCommand.Replace("`r`n", "`n")
   $seed = Invoke-Compose -Arguments @('exec', '-T', 'namenode', 'bash', '-ec', $seedCommand)
   if ($seed.ExitCode -ne 0) {
     throw "HDFS seed failed (exit $($seed.ExitCode)): $($seed.Output)"

@@ -37,6 +37,7 @@ function Invoke-Compose {
 
 Push-Location $demoRoot
 try {
+  # Healthcheck Knox xác nhận route WebHDFS qua HTTPS trả Basic challenge, không chỉ kiểm tra container còn chạy.
   $start = Invoke-Compose -Arguments @('up', '-d', '--wait', '--wait-timeout', "$TimeoutSeconds")
   if ($start.ExitCode -ne 0) {
     $states = Invoke-Compose -Arguments @('ps', '-a')
